@@ -129,8 +129,14 @@ public class EvaluationController {
 
         TeamRegistration registration = teamRegistrationRepository.findById(submission.getRegistrationId()).orElseThrow();
         List<ViolationReport> warnings = teamWarnings(registration.getHackathonId(), registration.getTeamId());
-        if (warnings.stream().anyMatch(w -> !w.isPenaltyEvaluated())) {
-            throw new IllegalStateException("Valutare tutte le ammonizioni del team prima della sottomissione");
+        List<Long> pendingReportIds = warnings.stream()
+                .filter(w -> !w.isPenaltyEvaluated())
+                .map(ViolationReport::getReportId)
+                .toList();
+        if (!pendingReportIds.isEmpty()) {
+            throw new IllegalStateException(
+                    "Valutare tutte le ammonizioni del team prima della sottomissione: reportId non valutati "
+                            + pendingReportIds);
         }
         int total = totalPenalty(warnings);
         LocalDateTime now = LocalDateTime.now();

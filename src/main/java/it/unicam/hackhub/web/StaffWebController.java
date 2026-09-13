@@ -14,6 +14,7 @@ import it.unicam.hackhub.model.StaffMember;
 import it.unicam.hackhub.model.ViolationReport;
 import it.unicam.hackhub.repository.StaffMemberRepository;
 import it.unicam.hackhub.web.dto.CreateHackathonRequest;
+import it.unicam.hackhub.web.dto.UpdateHackathonRequest;
 import it.unicam.hackhub.web.session.InMemorySessionStore;
 import it.unicam.hackhub.web.session.SessionAuth;
 import org.springframework.http.HttpStatus;
@@ -192,7 +193,7 @@ public class StaffWebController {
 
     @PutMapping("/organizer/hackathons/{hackathonId}")
     public Hackathon updateHackathon(@RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token,
-                                     @PathVariable long hackathonId, @RequestBody CreateHackathonRequest request) {
+                                     @PathVariable long hackathonId, @RequestBody UpdateHackathonRequest request) {
         if (request == null) throw new IllegalArgumentException("Dati obbligatori");
         return hackathonController.updateHackathon(SessionAuth.requireStaffId(sessionStore, token), hackathonId,
                 request.name(), request.regulation(), request.registrationDeadline(), request.startDate(), request.endDate(),

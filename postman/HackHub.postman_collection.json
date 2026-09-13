@@ -1,0 +1,1511 @@
+{
+  "info": {
+    "_postman_id": "hackhub-full-flow",
+    "name": "HackHub - Full Flow",
+    "description": "Collection completa per testare l'intero flusso applicativo di HackHub: registrazione/login, gestione profilo, creazione e gestione team, iscrizione hackathon, submission, supporto/call, valutazione, gestione disciplinare (mentor/judge/organizer) e pagamento premio.\n\nUsa l'environment 'HackHub - Local' (baseUrl = http://localhost:8080). Esegui le cartelle 1-13 in ordine (Collection Runner, o Newman con --folder ripetuto nell'ordine 1..13): le richieste salvano automaticamente token e id nelle variabili di environment/collection per essere riusate dalle richieste successive. Le cartelle 14 (disattivazione account) e 15 (logout) sono volutamente escluse dal run principale perche' invalidano le sessioni usate dal resto della suite: lanciale solo in un run dedicato, a parte.\n\nNOTA SUL TEMPO REALE: HackHub non permette di aggirare le date (vedi i commit/commenti del progetto). Lo stato di un hackathon avanza REGISTRATION -> RUNNING solo quando l'orologio ha superato la startDate, e RUNNING -> REVIEW solo dopo l'endDate. La cartella 4 crea quindi un hackathon con scadenze a pochi secondi da 'adesso' e le cartelle 7 e 11 attendono davvero (qualche secondo di pausa reale, non simulata) il raggiungimento di startDate/endDate prima di far avanzare lo stato. Un run completo richiede percio' circa 15-20 secondi in piu' di puro tempo di attesa: e' normale, non un errore.\n\nL'hackathon seedato 'HackHub Demo 1' (id 1) ha invece scadenze fisse nel 2026 ormai passate rispetto alla data corrente del sistema, quindi non e' piu' utilizzabile per iscrizioni/submission: viene usato solo per i test di sola lettura pubblica (cartella 3).\n\nPer ripartire da zero rilancia l'app (H2 file DB in ./data/hackhub, ddl-auto=update: i dati restano tra un riavvio e l'altro) oppure semplicemente rilancia la collection: gli username e i nomi hackathon/team sono generati con {{$timestamp}} quindi non collidono tra run diversi.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": null,
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" }
+  ],
+  "item": [
+    {
+      "name": "1. Autenticazione",
+      "description": "Registrazione, login, recupero credenziali e logout. Include la registrazione di un secondo utente (usato per testare gli inviti al team) e il login di tutti i profili staff seedati (organizer1/judge1/mentor1).",
+      "item": [
+        {
+          "name": "Registra Utente A (capitano team)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.collectionVariables.set('genUsernameA', 'utenteA_' + Date.now());"
+              ] }
+            },
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "const body = pm.response.json();",
+                "pm.test('Ritorna recoveryCode e profilo', () => {",
+                "    pm.expect(body).to.have.property('recoveryCode');",
+                "    pm.expect(body.profile).to.have.property('userId');",
+                "});",
+                "pm.environment.set('userId', body.profile.userId);",
+                "pm.environment.set('recoveryCode', body.recoveryCode);",
+                "pm.environment.set('username', pm.collectionVariables.get('genUsernameA'));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{genUsernameA}}\",\n  \"password\": \"Password123!\",\n  \"email\": \"{{genUsernameA}}@example.com\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "register" ] },
+            "description": "Registra il primo utente (partecipante). Email opzionale ma se presente deve essere valida. Ritorna un recoveryCode da conservare per il recupero credenziali."
+          }
+        },
+        {
+          "name": "Registra Utente B (invitato al team)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.collectionVariables.set('genUsernameB', 'utenteB_' + Date.now());"
+              ] }
+            },
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "const body = pm.response.json();",
+                "pm.environment.set('user2Id', body.profile.userId);",
+                "pm.environment.set('user2Username', pm.collectionVariables.get('genUsernameB'));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{genUsernameB}}\",\n  \"password\": \"Password123!\",\n  \"email\": \"{{genUsernameB}}@example.com\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "register" ] },
+            "description": "Secondo utente, servira' per ricevere l'invito a entrare nel team creato dall'Utente A."
+          }
+        },
+        {
+          "name": "Registra utente - username duplicato (errore atteso)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 4xx/409 - username gia in uso', () => {",
+                "    pm.expect(pm.response.code).to.be.oneOf([400, 409]);",
+                "});"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"Password123!\",\n  \"email\": \"altra@example.com\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/register", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "register" ] },
+            "description": "Caso negativo: registrare di nuovo lo stesso username deve fallire (409 conflitto / 400)."
+          }
+        },
+        {
+          "name": "Login Utente A",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.test('profileType USER', () => pm.expect(body.profileType).to.eql('USER'));",
+                "pm.environment.set('userToken', body.token);",
+                "pm.environment.set('userId', body.id);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"USER\",\n  \"identifier\": \"{{username}}\",\n  \"password\": \"Password123!\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "login" ] },
+            "description": "Login dell'Utente A. Salva il token di sessione in {{userToken}}, da inviare come header X-Session-Token nelle richieste successive."
+          }
+        },
+        {
+          "name": "Login Utente B",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.environment.set('user2Token', body.token);",
+                "pm.environment.set('user2Id', body.id);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"USER\",\n  \"identifier\": \"{{user2Username}}\",\n  \"password\": \"Password123!\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "login" ] }
+          }
+        },
+        {
+          "name": "Login Staff - Organizer1 (seed)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.test('profileType STAFF', () => pm.expect(body.profileType).to.eql('STAFF'));",
+                "pm.environment.set('organizerToken', body.token);",
+                "pm.environment.set('organizerId', body.id);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"STAFF\",\n  \"identifier\": \"organizer1\",\n  \"password\": \"organizer1pass\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "login" ] },
+            "description": "Credenziali seedate da DataSeeder.java: organizer1 / organizer1pass (ruolo ORGANIZER su 'HackHub Demo 1')."
+          }
+        },
+        {
+          "name": "Login Staff - Judge1 (seed)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.environment.set('judgeToken', body.token);",
+                "pm.environment.set('judgeId', body.id);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"STAFF\",\n  \"identifier\": \"judge1\",\n  \"password\": \"judge1pass\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "login" ] },
+            "description": "Credenziali seedate: judge1 / judge1pass (ruolo JUDGE su 'HackHub Demo 1')."
+          }
+        },
+        {
+          "name": "Login Staff - Mentor1 (seed)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.environment.set('mentorToken', body.token);",
+                "pm.environment.set('mentorId', body.id);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"STAFF\",\n  \"identifier\": \"mentor1\",\n  \"password\": \"mentor1pass\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "login" ] },
+            "description": "Credenziali seedate: mentor1 / mentor1pass (ruolo MENTOR su 'HackHub Demo 1')."
+          }
+        },
+        {
+          "name": "Login Staff - Mentor2 (seed)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.environment.set('mentor2Token', body.token);",
+                "pm.environment.set('mentor2Id', body.id);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"STAFF\",\n  \"identifier\": \"mentor2\",\n  \"password\": \"mentor2pass\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "login" ] },
+            "description": "Credenziali seedate: mentor2 / mentor2pass. Usato in cartella 4 per 'Aggiungi mentor extra' (mentor1 e' gia' assegnato in fase di creazione)."
+          }
+        },
+        {
+          "name": "Login con password errata (errore atteso)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 400 - credenziali non valide', () => pm.response.to.have.status(400));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"USER\",\n  \"identifier\": \"{{username}}\",\n  \"password\": \"passwordSbagliata\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "login" ] }
+          }
+        },
+        {
+          "name": "Recupero credenziali (recovery code)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/x-www-form-urlencoded" } ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "userName", "value": "{{username}}" },
+                { "key": "recoveryCode", "value": "{{recoveryCode}}" },
+                { "key": "newPassword", "value": "Password123!" }
+              ]
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/recover", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "recover" ] },
+            "description": "Usa il recoveryCode ricevuto in fase di registrazione per reimpostare la password (qui reimpostata sulla stessa, per non rompere i login successivi). ATTENZIONE: il reset password invalida per sicurezza tutte le sessioni attive dell'utente, incluso {{userToken}}: la richiesta successiva ('Re-login Utente A dopo recovery') genera un token fresco per il resto della suite."
+          }
+        },
+        {
+          "name": "Re-login Utente A dopo recovery",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.environment.set('userToken', body.token);",
+                "pm.environment.set('userId', body.id);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"USER\",\n  \"identifier\": \"{{username}}\",\n  \"password\": \"Password123!\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "login" ] },
+            "description": "Necessario perche' la richiesta 'Recupero credenziali' invalida la sessione precedente di Utente A. Da qui in poi {{userToken}} torna valido per tutte le cartelle successive."
+          }
+        },
+        {
+          "name": "[Facoltativa] Logout con token non valido (errore atteso)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200 - logout su token gia invalidato non genera errore', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "X-Session-Token", "value": "invalid-token-xyz" } ],
+            "url": { "raw": "{{baseUrl}}/api/auth/logout", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "logout" ] },
+            "description": "Verifica solo che l'endpoint sia idempotente/tollerante con un token inesistente. Non tocca {{userToken}}, quindi non rompe le richieste successive della collection."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Profilo Utente",
+      "description": "Visualizzazione e gestione del profilo dell'utente autenticato (Utente A).",
+      "item": [
+        {
+          "name": "Visualizza profilo",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.test('Contiene userId', () => pm.expect(pm.response.json()).to.have.property('userId'));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/profile", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "profile" ] }
+          }
+        },
+        {
+          "name": "Visualizza profilo senza token (errore atteso)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 401', () => pm.response.to.have.status(401));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/me/profile", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "profile" ] },
+            "description": "Nessun header X-Session-Token: deve rispondere 401 Non autenticato."
+          }
+        },
+        {
+          "name": "Aggiorna profilo (email)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/x-www-form-urlencoded" }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                { "key": "userName", "value": "{{username}}" },
+                { "key": "email", "value": "aggiornata_{{username}}@example.com" },
+                { "key": "currentPassword", "value": "Password123!" }
+              ]
+            },
+            "url": { "raw": "{{baseUrl}}/api/me/profile", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "profile" ] },
+            "description": "Richiede sempre currentPassword per confermare l'identita'. newPassword e' opzionale (omesso qui). ATTENZIONE: qualunque aggiornamento profilo invalida per sicurezza tutte le sessioni attive dell'utente (vedi AuthController.updateProfile), incluso {{userToken}}: la richiesta successiva rigenera un token fresco."
+          }
+        },
+        {
+          "name": "Re-login Utente A dopo aggiornamento profilo",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.environment.set('userToken', body.token);",
+                "pm.environment.set('userId', body.id);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"USER\",\n  \"identifier\": \"{{username}}\",\n  \"password\": \"Password123!\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/auth/login", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "login" ] },
+            "description": "Necessario perche' 'Aggiorna profilo' invalida la sessione precedente di Utente A. Da qui in poi {{userToken}} torna valido per le cartelle successive."
+          }
+        },
+        {
+          "name": "Emetti nuovo recovery code",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.environment.set('recoveryCode', pm.response.json().recoveryCode);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/x-www-form-urlencoded" }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [ { "key": "currentPassword", "value": "Password123!" } ]
+            },
+            "url": { "raw": "{{baseUrl}}/api/me/profile/recovery-code", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "profile", "recovery-code" ] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Hackathon (consultazione pubblica)",
+      "description": "Endpoint pubblici di sola lettura sugli hackathon.",
+      "item": [
+        {
+          "name": "Elenca tutti gli hackathon",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.test('E un array', () => pm.expect(body).to.be.an('array'));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/hackathons", "host": [ "{{baseUrl}}" ], "path": [ "api", "hackathons" ] },
+            "description": "Lista pubblica. Include 'HackHub Demo 1'/'HackHub Demo 2' seedati (scadenze ormai nel passato, usati solo per consultazione) e l'hackathon di test creato dalla cartella 4, una volta eseguita."
+          }
+        },
+        {
+          "name": "Dettaglio hackathon per id",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/hackathons/1", "host": [ "{{baseUrl}}" ], "path": [ "api", "hackathons", "1" ] },
+            "description": "Id 1 e' 'HackHub Demo 1', sempre presente dal seed."
+          }
+        },
+        {
+          "name": "Dettaglio hackathon inesistente (errore atteso)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 400', () => pm.response.to.have.status(400));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/api/hackathons/999999", "host": [ "{{baseUrl}}" ], "path": [ "api", "hackathons", "999999" ] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Organizer: crea hackathon di test",
+      "description": "L'hackathon seedato 'HackHub Demo 1' ha scadenze fisse nel 2026 ormai nel passato e non e' piu' utilizzabile per iscrizioni/submission. Questa cartella crea un hackathon con scadenze a pochi secondi da 'adesso' (registrationDeadline +10s, startDate +13s, endDate/submissionDeadline +22s) e lo promuove a {{hackathonId}} di riferimento per TUTTE le cartelle successive (Team, Iscrizione, Submission, Supporto, Segnalazioni, Judge, Organizer). {{newHackathonId}} resta uguale a {{hackathonId}}.",
+      "item": [
+        {
+          "name": "Crea nuovo hackathon",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "type": "text/javascript", "exec": [
+                "// Date vicinissime ad 'adesso': servono finestre reali per REGISTRATION/RUNNING/REVIEW (vedi cartelle 7 e 11), non scadenze fittizie.",
+                "function toLocalIso(d) {",
+                "    const pad = n => String(n).padStart(2, '0');",
+                "    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;",
+                "}",
+                "const now = Date.now();",
+                "const regDeadline = new Date(now + 10000);",
+                "const startDate = new Date(now + 13000);",
+                "const endDate = new Date(now + 22000);",
+                "pm.collectionVariables.set('hkRegDeadline', toLocalIso(regDeadline));",
+                "pm.collectionVariables.set('hkStartDate', toLocalIso(startDate));",
+                "pm.collectionVariables.set('hkEndDate', toLocalIso(endDate));",
+                "pm.collectionVariables.set('hkStartEpoch', startDate.getTime());",
+                "pm.collectionVariables.set('hkEndEpoch', endDate.getTime());"
+              ] }
+            },
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "const newId = pm.response.json().hackathonId;",
+                "pm.environment.set('newHackathonId', newId);",
+                "pm.environment.set('hackathonId', newId);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{organizerToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"HackHub Test {{$timestamp}}\",\n  \"regulation\": \"Regolamento di test creato via Postman\",\n  \"registrationDeadline\": \"{{hkRegDeadline}}\",\n  \"startDate\": \"{{hkStartDate}}\",\n  \"endDate\": \"{{hkEndDate}}\",\n  \"submissionDeadline\": \"{{hkEndDate}}\",\n  \"location\": \"Ancona\",\n  \"prizeAmount\": 1000.00,\n  \"maxTeamSize\": 4,\n  \"judgeId\": {{judgeId}},\n  \"mentorIds\": [{{mentorId}}]\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/hackathons", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "hackathons" ] },
+            "description": "Richiede almeno un judge e un mentor validi (usa gli id ottenuti dai login di judge1/mentor1 nella cartella 1). submissionDeadline deve essere esattamente uguale a endDate (vincolo di dominio in HackathonController). L'hackathon nasce in stato REGISTRATION."
+          }
+        },
+        {
+          "name": "Aggiorna hackathon",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{organizerToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"HackHub Test {{$timestamp}} (aggiornato)\",\n  \"regulation\": \"Regolamento aggiornato\",\n  \"registrationDeadline\": \"{{hkRegDeadline}}\",\n  \"startDate\": \"{{hkStartDate}}\",\n  \"endDate\": \"{{hkEndDate}}\",\n  \"submissionDeadline\": \"{{hkEndDate}}\",\n  \"location\": \"Camerino\",\n  \"prizeAmount\": 1500.00,\n  \"maxTeamSize\": 5\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/hackathons/{{newHackathonId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "hackathons", "{{newHackathonId}}" ] },
+            "description": "Consentito solo mentre l'hackathon e' ancora in REGISTRATION e prima della registrationDeadline/startDate: va eseguito qui, subito dopo la creazione. Usa il DTO dedicato UpdateHackathonRequest (senza judgeId/mentorIds, non pertinenti a un update)."
+          }
+        },
+        {
+          "name": "Aggiungi mentor extra",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{organizerToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"mentorIds\": [{{mentor2Id}}]\n}" },
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/hackathons/{{newHackathonId}}/mentors", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "hackathons", "{{newHackathonId}}", "mentors" ] },
+            "description": "Usa mentor2 (non mentor1, gia' assegnato in fase di creazione dell'hackathon): aggiungere due volte lo stesso mentor fallisce con 'Mentore gia assegnato'."
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Team (creazione e inviti)",
+      "description": "L'Utente A crea un team e invita l'Utente B, che accetta l'invito ed entra nel team.",
+      "item": [
+        {
+          "name": "Crea team (Utente A)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "const body = pm.response.json();",
+                "pm.environment.set('teamId', body.teamId);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"teamName\": \"Team Rocket {{$timestamp}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/team", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "team" ] }
+          }
+        },
+        {
+          "name": "Visualizza il mio team",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/team", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "team" ] }
+          }
+        },
+        {
+          "name": "Invita Utente B nel team",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "pm.environment.set('invitationId', pm.response.json().invitationId);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"invitedUsername\": \"{{user2Username}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/team/invitations", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "team", "invitations" ] }
+          }
+        },
+        {
+          "name": "Elenca inviti inviati (Utente A)",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/team/invitations/sent", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "team", "invitations", "sent" ] }
+          }
+        },
+        {
+          "name": "Elenca inviti ricevuti (Utente B)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.json();",
+                "pm.test('Contiene almeno un invito', () => pm.expect(body.length).to.be.above(0));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{user2Token}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/invitations", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "invitations" ] }
+          }
+        },
+        {
+          "name": "Accetta invito (Utente B)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{user2Token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"action\": \"ACCEPT\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/invitations/{{invitationId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "invitations", "{{invitationId}}" ] },
+            "description": "In alternativa si puo' passare 'DECLINE' per rifiutare (vedi richiesta dedicata sotto)."
+          }
+        },
+        {
+          "name": "[Alternativa] Rifiuta invito (Utente B)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{user2Token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"action\": \"DECLINE\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/invitations/{{invitationId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "invitations", "{{invitationId}}" ] },
+            "description": "Non eseguire in sequenza con 'Accetta invito': sono due scenari alternativi sullo stesso invito."
+          }
+        },
+        {
+          "name": "[Facoltativa] Annulla invito prima dell'accettazione",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/invitations/{{invitationId}}/cancel", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "invitations", "{{invitationId}}", "cancel" ] },
+            "description": "Il capitano del team annulla un invito ancora pendente (da eseguire al posto di Accetta/Rifiuta se si vuole testare questo scenario)."
+          }
+        },
+        {
+          "name": "[Facoltativa] Invito multiplo (batch)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"userIds\": [{{user2Id}}]\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/teams/{{teamId}}/invitations/batch", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "teams", "{{teamId}}", "invitations", "batch" ] },
+            "description": "Invita piu' utenti in un'unica chiamata (array di userId)."
+          }
+        },
+        {
+          "name": "[Facoltativa] Abbandona team",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "X-Session-Token", "value": "{{user2Token}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/team/leave", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "team", "leave" ] },
+            "description": "Un membro (non l'ultimo/capitano, secondo le regole di dominio) abbandona il team corrente."
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Iscrizione Team a Hackathon",
+      "description": "Il team dell'Utente A si iscrive all'hackathon di test creato nella cartella 4 (ancora in REGISTRATION, entro la registrationDeadline).",
+      "item": [
+        {
+          "name": "Elenca hackathon a cui il team puo iscriversi",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/registerable-hackathons", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "registerable-hackathons" ] }
+          }
+        },
+        {
+          "name": "Iscrivi team all'hackathon",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "pm.environment.set('registrationId', pm.response.json().registrationId);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"hackathonId\": {{hackathonId}}\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/registration", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "registration" ] },
+            "description": "Richiede che l'utente sia in un team e che l'hackathon sia in stato REGISTRATION con deadline non scaduta."
+          }
+        },
+        {
+          "name": "Iscrizione duplicata (errore atteso)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 409/400 - gia iscritto', () => pm.expect(pm.response.code).to.be.oneOf([400, 409]));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"hackathonId\": {{hackathonId}}\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/registration", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "registration" ] }
+          }
+        },
+        {
+          "name": "Visualizza la mia iscrizione",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/registration", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "registration" ] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Organizer: avvia la gara",
+      "description": "Attende (tempo reale, non simulato) il raggiungimento della startDate impostata nella cartella 4, poi avanza l'hackathon da REGISTRATION a RUNNING. Questa attesa richiede alcuni secondi: e' un comportamento atteso del progetto (le date non si aggirano).",
+      "item": [
+        {
+          "name": "Attendi lo startDate e avvia RUNNING",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "type": "text/javascript", "exec": [
+                "const target = parseInt(pm.collectionVariables.get('hkStartEpoch'), 10) + 700;",
+                "while (Date.now() < target) { /* attesa reale dello startDate, nessuna data viene falsificata */ }"
+              ] }
+            },
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200 - hackathon in RUNNING', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "X-Session-Token", "value": "{{organizerToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/hackathons/{{hackathonId}}/advance", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "hackathons", "{{hackathonId}}", "advance" ] },
+            "description": "REGISTRATION -> RUNNING e' permesso solo quando l'orologio ha superato la startDate dell'hackathon."
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Submission",
+      "description": "Invio e aggiornamento dell'elaborato del team (richiede l'hackathon in RUNNING, raggiunto nella cartella 7).",
+      "item": [
+        {
+          "name": "Verifica submission assente (404 atteso)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 404', () => pm.response.to.have.status(404));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/submission", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "submission" ] },
+            "description": "Da eseguire PRIMA del primo invio: deve rispondere 404 perche' la submission non esiste ancora."
+          }
+        },
+        {
+          "name": "Invia submission (primo invio)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "pm.environment.set('submissionId', pm.response.json().submissionId);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"content\": \"Link progetto: https://github.com/team-rocket/progetto - Prima versione dell'elaborato.\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/submission", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "submission" ] }
+          }
+        },
+        {
+          "name": "Invia submission gia esistente (errore atteso)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 409 - usa update', () => pm.response.to.have.status(409));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"content\": \"Secondo tentativo di primo invio\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/submission", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "submission" ] }
+          }
+        },
+        {
+          "name": "Recupera la mia submission",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/submission", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "submission" ] }
+          }
+        },
+        {
+          "name": "Aggiorna submission",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"content\": \"Link progetto: https://github.com/team-rocket/progetto - Versione aggiornata con demo.\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/submission", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "submission" ] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "9. Supporto & Call con Mentor",
+      "description": "Il team apre una richiesta di supporto, il mentor propone uno slot di call, il team prenota lo slot. Richiede l'hackathon in RUNNING.",
+      "item": [
+        {
+          "name": "Crea richiesta di supporto (team)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "pm.environment.set('supportRequestId', pm.response.json().requestId);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"message\": \"Abbiamo bisogno di aiuto per l'architettura del backend.\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/me/support/requests", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "support", "requests" ] }
+          }
+        },
+        {
+          "name": "Elenca le mie richieste di supporto",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/support/requests", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "support", "requests" ] }
+          }
+        },
+        {
+          "name": "Mentor: elenca hackathon assegnati",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{mentorToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/mentor/hackathons", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "mentor", "hackathons" ] }
+          }
+        },
+        {
+          "name": "Mentor: elenca richieste di supporto dell'hackathon",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{mentorToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/mentor/hackathons/{{hackathonId}}/support-requests", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "mentor", "hackathons", "{{hackathonId}}", "support-requests" ] }
+          }
+        },
+        {
+          "name": "Mentor: crea proposta di call",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "type": "text/javascript", "exec": [
+                "// La proposta deve cadere DENTRO la finestra RUNNING dell'hackathon di test (vedi cartella 4): proposedStart > now, >= startDate, e proposedEnd <= endDate.",
+                "function toLocalIso(d) {",
+                "    const pad = n => String(n).padStart(2, '0');",
+                "    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;",
+                "}",
+                "const hkEndEpoch = parseInt(pm.collectionVariables.get('hkEndEpoch'), 10);",
+                "const start = new Date(Date.now() + 2000);",
+                "let end = new Date(Date.now() + 4000);",
+                "if (end.getTime() > hkEndEpoch - 300) { end = new Date(hkEndEpoch - 300); }",
+                "if (start.getTime() > end.getTime() - 1000) { start.setTime(end.getTime() - 1000); }",
+                "pm.collectionVariables.set('callStart', toLocalIso(start));",
+                "pm.collectionVariables.set('callEnd', toLocalIso(end));"
+              ] }
+            },
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "pm.environment.set('callProposalId', pm.response.json().proposalId);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{mentorToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"proposedStart\": \"{{callStart}}\",\n  \"proposedEnd\": \"{{callEnd}}\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/staff/mentor/support-requests/{{supportRequestId}}/call-proposals", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "mentor", "support-requests", "{{supportRequestId}}", "call-proposals" ] },
+            "description": "Slot proposto: tra qualche secondo da ora, entro la endDate dell'hackathon di test (SupportController.createCallProposal rifiuta intervalli fuori dalla finestra RUNNING)."
+          }
+        },
+        {
+          "name": "Team: elenca proposte di call disponibili",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/calls/proposals", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "calls", "proposals" ] }
+          }
+        },
+        {
+          "name": "Team: prenota proposta di call",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/calls/proposals/{{callProposalId}}/book", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "calls", "proposals", "{{callProposalId}}", "book" ] }
+          }
+        },
+        {
+          "name": "[Facoltativa] Team: annulla richiesta di supporto",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/support/requests/{{supportRequestId}}/cancel", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "support", "requests", "{{supportRequestId}}", "cancel" ] },
+            "description": "Da usare come scenario alternativo, non in sequenza con la prenotazione della call gia' creata."
+          }
+        }
+      ]
+    },
+    {
+      "name": "10. Segnalazioni disciplinari (Mentor -> Organizer)",
+      "description": "Il mentor apre una segnalazione su un team, l'organizer decide (REJECT / WARN / EXPEL). Richiede l'hackathon in RUNNING (sia per la creazione/modifica del report da parte del mentor, sia per la decisione dell'organizer).",
+      "item": [
+        {
+          "name": "Mentor: crea segnalazione disciplinare",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "pm.environment.set('violationReportId', pm.response.json().reportId);"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{mentorToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"hackathonId\": {{hackathonId}},\n  \"teamId\": {{teamId}},\n  \"description\": \"Comportamento scorretto in chat durante la call di supporto.\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/staff/mentor/violation-reports", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "mentor", "violation-reports" ] }
+          }
+        },
+        {
+          "name": "Mentor: aggiorna testo segnalazione",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{mentorToken}}" },
+              { "key": "Content-Type", "value": "application/x-www-form-urlencoded" }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [ { "key": "description", "value": "Comportamento scorretto in chat, confermato da piu' testimoni." } ]
+            },
+            "url": { "raw": "{{baseUrl}}/api/staff/mentor/reports/{{violationReportId}}/update", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "mentor", "reports", "{{violationReportId}}", "update" ] }
+          }
+        },
+        {
+          "name": "Organizer: elenca segnalazioni pendenti",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{organizerToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/hackathons/{{hackathonId}}/violation-reports/pending", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "hackathons", "{{hackathonId}}", "violation-reports", "pending" ] }
+          }
+        },
+        {
+          "name": "Organizer: decide sulla segnalazione (WARN)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{organizerToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"WARN\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/violation-reports/{{violationReportId}}/decision", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "violation-reports", "{{violationReportId}}", "decision" ] },
+            "description": "Valori ammessi: REJECT (respinta), WARN (ammonizione, valutata poi dal judge in cartella 12), EXPEL (espulsione immediata del team). Sceglie WARN per poter testare anche 'Valuta ammonizione' nella cartella 12."
+          }
+        },
+        {
+          "name": "[Alternativa] Organizer: respinge segnalazione (REJECT)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{organizerToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"REJECT\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/violation-reports/{{violationReportId}}/decision", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "violation-reports", "{{violationReportId}}", "decision" ] },
+            "description": "Scenario alternativo: non eseguire sulla stessa segnalazione gia' decisa con WARN/EXPEL."
+          }
+        },
+        {
+          "name": "[Alternativa] Organizer: espelle il team (EXPEL)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{organizerToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"decision\": \"EXPEL\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/violation-reports/{{violationReportId}}/decision", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "violation-reports", "{{violationReportId}}", "decision" ] },
+            "description": "Scenario alternativo distruttivo: espelle il team dall'hackathon. Non combinarlo con il resto della suite (impedirebbe la valutazione della submission del team)."
+          }
+        },
+        {
+          "name": "[Facoltativa] Mentor: ritira segnalazione",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "X-Session-Token", "value": "{{mentorToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/mentor/reports/{{violationReportId}}/withdraw", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "mentor", "reports", "{{violationReportId}}", "withdraw" ] },
+            "description": "Da usare come scenario alternativo, prima che l'organizer prenda una decisione."
+          }
+        }
+      ]
+    },
+    {
+      "name": "11. Organizer: chiude la fase di gara",
+      "description": "Attende (tempo reale, non simulato) il raggiungimento della endDate impostata nella cartella 4, poi avanza l'hackathon da RUNNING a REVIEW.",
+      "item": [
+        {
+          "name": "Attendi l'endDate e passa a REVIEW",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": { "type": "text/javascript", "exec": [
+                "const target = parseInt(pm.collectionVariables.get('hkEndEpoch'), 10) + 700;",
+                "while (Date.now() < target) { /* attesa reale dell'endDate, nessuna data viene falsificata */ }"
+              ] }
+            },
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200 - hackathon in REVIEW', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "X-Session-Token", "value": "{{organizerToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/hackathons/{{hackathonId}}/advance", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "hackathons", "{{hackathonId}}", "advance" ] },
+            "description": "RUNNING -> REVIEW e' permesso solo quando l'orologio ha superato la endDate dell'hackathon."
+          }
+        }
+      ]
+    },
+    {
+      "name": "12. Staff - Judge (valutazione submission)",
+      "description": "Il judge visualizza e valuta le submission dell'hackathon di test, ormai in REVIEW (cartella 11). Include anche la valutazione dell'ammonizione decisa nella cartella 10.",
+      "item": [
+        {
+          "name": "Elenca membri staff",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{judgeToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/members", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "members" ] }
+          }
+        },
+        {
+          "name": "Elenca hackathon assegnati allo staff",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{judgeToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/me/hackathons", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "me", "hackathons" ] }
+          }
+        },
+        {
+          "name": "Elenca submission dell'hackathon",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{judgeToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/hackathons/{{hackathonId}}/submissions", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "hackathons", "{{hackathonId}}", "submissions" ] }
+          }
+        },
+        {
+          "name": "Dettaglio submission",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{judgeToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/hackathons/{{hackathonId}}/submissions/{{submissionId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "hackathons", "{{hackathonId}}", "submissions", "{{submissionId}}" ] }
+          }
+        },
+        {
+          "name": "Elenca ammonizioni (warnings) hackathon",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{judgeToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/judge/hackathons/{{hackathonId}}/warnings", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "judge", "hackathons", "{{hackathonId}}", "warnings" ] }
+          }
+        },
+        {
+          "name": "Valuta ammonizione (applica penalita)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{judgeToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"penalty\": 5\n}" },
+            "url": { "raw": "{{baseUrl}}/api/staff/judge/warnings/{{violationReportId}}/evaluation", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "judge", "warnings", "{{violationReportId}}", "evaluation" ] },
+            "description": "Richiede la segnalazione della cartella 10 con decisione WARN e l'hackathon in REVIEW. IMPORTANTE: va eseguita PRIMA di 'Valuta submission' - EvaluationController.evaluateSubmission rifiuta la valutazione se il team ha ammonizioni non ancora valutate dal judge."
+          }
+        },
+        {
+          "name": "Elenca espulsioni hackathon",
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{judgeToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/judge/hackathons/{{hackathonId}}/expulsions", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "judge", "hackathons", "{{hackathonId}}", "expulsions" ] }
+          }
+        },
+        {
+          "name": "Valuta submission",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{judgeToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"score\": 27,\n  \"comment\": \"Ottimo lavoro, buona architettura e demo funzionante.\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/staff/hackathons/{{hackathonId}}/submissions/{{submissionId}}/evaluation", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "hackathons", "{{hackathonId}}", "submissions", "{{submissionId}}", "evaluation" ] },
+            "description": "Richiede che l'hackathon sia in REVIEW (garantito dalla cartella 11) e che tutte le ammonizioni del team siano gia' state valutate (vedi richiesta precedente). Score 0-30."
+          }
+        },
+        {
+          "name": "Recupera valutazione submission",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{judgeToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/hackathons/{{hackathonId}}/submissions/{{submissionId}}/evaluation", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "hackathons", "{{hackathonId}}", "submissions", "{{submissionId}}", "evaluation" ] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "13. Staff - Organizer (proclamazione e premio)",
+      "description": "Ultima fase dell'hackathon di test: proclamazione del vincitore e pagamento del premio. Richiede l'hackathon in REVIEW e la submission gia' valutata (cartella 12).",
+      "item": [
+        {
+          "name": "Imposta il team vincitore",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{organizerToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"teamId\": {{teamId}}\n}" },
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/hackathons/{{hackathonId}}/winner", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "hackathons", "{{hackathonId}}", "winner" ] }
+          }
+        },
+        {
+          "name": "Paga il premio al vincitore",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "X-Session-Token", "value": "{{organizerToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/hackathons/{{hackathonId}}/pay-prize", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "hackathons", "{{hackathonId}}", "pay-prize" ] },
+            "description": "Chiama il PaymentSystem esterno; la risposta indica esito, receiptId (se successo) o lastErrorMessage (se fallito). Al pagamento riuscito l'hackathon passa automaticamente a CLOSED."
+          }
+        },
+        {
+          "name": "[Facoltativa] Elimina hackathon",
+          "request": {
+            "method": "DELETE",
+            "header": [ { "key": "X-Session-Token", "value": "{{organizerToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/staff/organizer/hackathons/{{hackathonId}}", "host": [ "{{baseUrl}}" ], "path": [ "api", "staff", "organizer", "hackathons", "{{hackathonId}}" ] },
+            "description": "Consentita solo mentre l'hackathon e' ancora in REGISTRATION, prima dello startDate e senza registrazioni: a questo punto della suite fallira' sempre (atteso), e' qui solo per documentare l'endpoint. Per testarla davvero, chiamala subito dopo la cartella 4 su un hackathon senza iscrizioni."
+          }
+        }
+      ]
+    },
+    {
+      "name": "14. Disattivazione account (distruttivo, eseguire per ultimo)",
+      "description": "Endpoint distruttivo: disattiva l'account dell'Utente A. Da lanciare solo a fine suite, in un run dedicato, per non invalidare il resto dei test.",
+      "item": [
+        {
+          "name": "Disattiva profilo Utente A",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Session-Token", "value": "{{userToken}}" },
+              { "key": "Content-Type", "value": "application/x-www-form-urlencoded" }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [ { "key": "currentPassword", "value": "Password123!" } ]
+            },
+            "url": { "raw": "{{baseUrl}}/api/me/profile/deactivate", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "profile", "deactivate" ] },
+            "description": "ATTENZIONE: azione irreversibile via API sui dati demo. Esegui solo se vuoi verificare esplicitamente questo flusso."
+          }
+        }
+      ]
+    },
+    {
+      "name": "15. Logout (eseguire per ultimo)",
+      "description": "Test del vero logout con token valido. Invalida {{userToken}}: metti questa cartella per ultima in ogni run, altrimenti tutte le richieste successive che usano {{userToken}} falliranno con 401.",
+      "item": [
+        {
+          "name": "Logout Utente A (token valido)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/auth/logout", "host": [ "{{baseUrl}}" ], "path": [ "api", "auth", "logout" ] }
+          }
+        },
+        {
+          "name": "Verifica: profilo non piu accessibile dopo logout (errore atteso)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "type": "text/javascript", "exec": [
+                "pm.test('Status 401 - sessione invalidata', () => pm.response.to.have.status(401));"
+              ] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [ { "key": "X-Session-Token", "value": "{{userToken}}" } ],
+            "url": { "raw": "{{baseUrl}}/api/me/profile", "host": [ "{{baseUrl}}" ], "path": [ "api", "me", "profile" ] }
+          }
+        }
+      ]
+    }
+  ]
+}
