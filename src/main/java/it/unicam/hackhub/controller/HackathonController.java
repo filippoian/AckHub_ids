@@ -8,6 +8,7 @@ import it.unicam.hackhub.model.StaffMember;
 import it.unicam.hackhub.model.Submission;
 import it.unicam.hackhub.model.Team;
 import it.unicam.hackhub.model.TeamRegistration;
+import it.unicam.hackhub.model.ViolationReport;
 import it.unicam.hackhub.model.enums.HackathonStatus;
 import it.unicam.hackhub.model.enums.StaffRole;
 import it.unicam.hackhub.repository.EvaluationRepository;
@@ -159,11 +160,8 @@ public class HackathonController {
         if (!startDate.isBefore(endDate)) {
             throw new IllegalArgumentException("Start date deve essere prima di end date");
         }
-        if (submissionDeadline == null) {
-            throw new IllegalArgumentException("Submission deadline non valida");
-        }
-        if (submissionDeadline.isBefore(startDate)) {
-            throw new IllegalArgumentException("Submission deadline non puo essere prima della start date");
+        if (submissionDeadline != null && !submissionDeadline.equals(endDate)) {
+            throw new IllegalArgumentException("La scadenza delle sottomissioni coincide con la fine della gara");
         }
         if (mentorStaffIds == null || mentorStaffIds.isEmpty()) {
             throw new IllegalArgumentException("Almeno un mentor e richiesto");
@@ -188,7 +186,7 @@ public class HackathonController {
                     .orElseThrow(() -> new IllegalArgumentException("Mentor non trovato: " + mentorId));
         }
 
-        if (!regDeadline.isAfter(LocalDateTime.now()) || !submissionDeadline.equals(endDate))
+        if (!regDeadline.isAfter(LocalDateTime.now()))
             throw new IllegalArgumentException("Scadenze non valide");
         if (regulation == null || regulation.isBlank()) throw new IllegalArgumentException("Regolamento obbligatorio");
 
@@ -199,7 +197,7 @@ public class HackathonController {
                 .registrationDeadline(regDeadline)
                 .startDate(startDate)
                 .endDate(endDate)
-                .submissionDeadline(submissionDeadline)
+                .submissionDeadline(endDate)
                 .location(location.trim())
                 .prizeAmount(prizeAmount)
                 .maxTeamSize(maxTeamSize)
@@ -235,9 +233,9 @@ public class HackathonController {
         if (name == null || name.isBlank() || regulation == null || regulation.isBlank()
                 || location == null || location.isBlank() || prizeAmount == null || prizeAmount.signum() < 0
                 || maxTeamSize <= 0 || registrationDeadline == null || startDate == null || endDate == null
-                || submissionDeadline == null || !registrationDeadline.isAfter(now)
+                || !registrationDeadline.isAfter(now)
                 || !registrationDeadline.isBefore(startDate) || !startDate.isBefore(endDate)
-                || submissionDeadline.isBefore(startDate) || !submissionDeadline.equals(endDate))
+                || (submissionDeadline != null && !submissionDeadline.equals(endDate)))
             throw new IllegalArgumentException("Dati o scadenze non validi");
         if (hackathonRepository.findByName(name.trim()).filter(h -> h.getHackathonId() != hackathonId).isPresent())
             throw new IllegalArgumentException("Nome già utilizzato");
@@ -250,7 +248,7 @@ public class HackathonController {
         event.setRegistrationDeadline(registrationDeadline);
         event.setStartDate(startDate);
         event.setEndDate(endDate);
-        event.setSubmissionDeadline(submissionDeadline);
+        event.setSubmissionDeadline(endDate);
         event.setLocation(location.trim());
         event.setPrizeAmount(prizeAmount);
         event.setMaxTeamSize(maxTeamSize);
@@ -268,20 +266,48 @@ public class HackathonController {
         hackathonRepository.save(event);
     }
 
+    public PhaseTransition viewPhaseTransition(long currentStaffId, long hackathonId) {
+        Hackathon event = hackathonRepository.findById(hackathonId)
+                .orElseThrow(() -> new IllegalArgumentException("Hackathon non trovato"));
+        ensureOrganizer(currentStaffId, hackathonId, "Solo l’organizzatore può consultare le transizioni");
+        return transitionFor(event);
+    }
+
+    private PhaseTransition transitionFor(Hackathon event) {
+        return switch (event.getStatus()) {
+            case REGISTRATION -> new PhaseTransition(event.getStatus(), HackathonStatus.RUNNING,
+                    event.getStartDate(), "Inizio della gara");
+            case RUNNING -> new PhaseTransition(event.getStatus(), HackathonStatus.REVIEW,
+                    event.getEndDate(), "Fine della gara");
+            case REVIEW -> new PhaseTransition(event.getStatus(), HackathonStatus.CLOSED,
+                    null, "Vincitore proclamato e premio gestito");
+            case CLOSED -> new PhaseTransition(event.getStatus(), null, null, "Evento concluso");
+        };
+    }
+
+    public record PhaseTransition(HackathonStatus current, HackathonStatus next, LocalDateTime availableFrom,
+                                  String requirement) {
+    }
+
     // Porta l'hackathon allo stato successivo.
     @org.springframework.transaction.annotation.Transactional
     public Hackathon advanceStatus(long currentStaffId, long hackathonId) {
-        Hackathon hackathon = hackathonRepository.findById(hackathonId)
+        return advanceStatus(currentStaffId, hackathonId, null);
+    }
+
+    @org.springframework.transaction.annotation.Transactional
+    public Hackathon advanceStatus(long currentStaffId, long hackathonId, HackathonStatus expectedNext) {
+        Hackathon hackathon = hackathonRepository.findByIdForUpdate(hackathonId)
                 .orElseThrow(() -> new IllegalArgumentException("Hackathon not found"));
         ensureOrganizer(currentStaffId, hackathonId, "Not authorized: only organizer can advance status");
 
-        // La sequenza ammessa e': REGISTRATION -> RUNNING -> REVIEW -> CLOSED.
-        HackathonStatus nextStatus = switch (hackathon.getStatus()) {
-            case REGISTRATION -> HackathonStatus.RUNNING;
-            case RUNNING -> HackathonStatus.REVIEW;
-            case REVIEW -> HackathonStatus.CLOSED;
-            case CLOSED -> throw new IllegalStateException("Hackathon already closed");
-        };
+        HackathonStatus nextStatus = transitionFor(hackathon).next();
+        if (nextStatus == null) {
+            throw new IllegalStateException("Hackathon già concluso");
+        }
+        if (expectedNext != null && expectedNext != nextStatus) {
+            throw new IllegalStateException("La prossima fase disponibile è " + nextStatus);
+        }
 
         if (nextStatus == HackathonStatus.CLOSED && (hackathon.getWinnerTeamId() == null || !hackathon.isPrizePaid())) {
             throw new IllegalStateException("Concludere prima proclamazione e pagamento del premio");
@@ -301,10 +327,60 @@ public class HackathonController {
         return hackathonRepository.save(hackathon);
     }
 
+    public ProclamationView viewProclamation(long currentStaffId, long hackathonId) {
+        ensureOrganizer(currentStaffId, hackathonId, "Solo l’organizzatore può consultare la proclamazione");
+        Hackathon event = hackathonRepository.findById(hackathonId)
+                .orElseThrow(() -> new IllegalArgumentException("Hackathon non trovato"));
+        List<ViolationReport> reports = violationReportRepository.findByHackathonId(hackathonId);
+        List<ProclamationTeam> teams = teamRegistrationRepository.findByHackathonId(hackathonId).stream()
+                .map(registration -> proclamationTeam(registration, reports))
+                .toList();
+        boolean missing = teams.stream().anyMatch(ProclamationTeam::missingRequirements);
+        boolean hasCandidate = teams.stream().anyMatch(ProclamationTeam::isEligible);
+        return new ProclamationView(event.getStatus(), event.getWinnerTeamId(), event.isPrizePaid(),
+                event.getPrizeReceiptId(), !missing && hasCandidate && event.canEvaluate() && event.getWinnerTeamId() == null,
+                teams);
+    }
+
+    private ProclamationTeam proclamationTeam(TeamRegistration registration, List<ViolationReport> reports) {
+        long teamId = registration.getTeamId();
+        String teamName = teamRepository.findById(teamId).map(Team::getTeamName).orElse(null);
+        Optional<Submission> submission = submissionRepository.findByRegistrationId(registration.getRegistrationId());
+        Optional<Evaluation> evaluation = submission.flatMap(item -> evaluationRepository.findBySubmissionId(item.getSubmissionId()));
+        List<Long> pendingWarnings = reports.stream()
+                .filter(report -> report.getTeamId() == teamId && "TEAM_WARNED".equals(report.getDecision())
+                        && !report.isPenaltyEvaluated())
+                .map(ViolationReport::getReportId).toList();
+        return new ProclamationTeam(teamId, teamName, registration.isExpelled(),
+                submission.map(Submission::getSubmissionId).orElse(null), evaluation.map(Evaluation::getScore).orElse(null),
+                pendingWarnings);
+    }
+
+    public record ProclamationTeam(long teamId, String teamName, boolean expelled, Long submissionId,
+                                   Integer finalScore, List<Long> pendingWarnings) {
+        public boolean isEligible() {
+            return !expelled && submissionId != null && finalScore != null;
+        }
+
+        public boolean missingRequirements() {
+            return !expelled && submissionId != null && (finalScore == null || !pendingWarnings.isEmpty());
+        }
+    }
+
+    public record ProclamationView(HackathonStatus status, Long winnerTeamId, boolean prizePaid, String receiptId,
+                                   boolean canProclaim, List<ProclamationTeam> teams) {
+    }
+
+    public Optional<String> getWinnerTeamName(Hackathon hackathon) {
+        return Optional.ofNullable(hackathon.getWinnerTeamId())
+                .flatMap(teamRepository::findById)
+                .map(Team::getTeamName);
+    }
+
     // La proclamazione viene salvata indipendentemente dall'erogazione del premio.
     @org.springframework.transaction.annotation.Transactional
     public Hackathon setWinner(long currentStaffId, long hackathonId, long teamId) {
-        Hackathon hackathon = hackathonRepository.findById(hackathonId)
+        Hackathon hackathon = hackathonRepository.findByIdForUpdate(hackathonId)
                 .orElseThrow(() -> new IllegalArgumentException("Hackathon not found"));
         ensureOrganizer(currentStaffId, hackathonId, "Not authorized: only organizer can manage prize");
 
@@ -357,14 +433,19 @@ public class HackathonController {
 
     // Eroga il premio se il winner e' gia' stato deciso.
     @org.springframework.transaction.annotation.Transactional
-    public synchronized String payPrize(long currentStaffId, long hackathonId) {
-        Hackathon hackathon = hackathonRepository.findById(hackathonId)
+    public String payPrize(long currentStaffId, long hackathonId) {
+        return payPrizeResult(currentStaffId, hackathonId).result();
+    }
+
+    @org.springframework.transaction.annotation.Transactional
+    public synchronized PrizeResult payPrizeResult(long currentStaffId, long hackathonId) {
+        Hackathon hackathon = hackathonRepository.findByIdForUpdate(hackathonId)
                 .orElseThrow(() -> new IllegalArgumentException("Hackathon not found"));
         ensureOrganizer(currentStaffId, hackathonId, "Not authorized: only organizer can manage prize");
 
         if (hackathon.isPrizePaid()) {
-            return "Premio gia erogato: receipt=" + hackathon.getPrizeReceiptId() + ", teamId=" + hackathon.getWinnerTeamId()
-                    + ", amount=" + hackathon.getPrizeAmount();
+            return prizeResult(hackathon, "Premio gia erogato: receipt=" + hackathon.getPrizeReceiptId()
+                    + ", teamId=" + hackathon.getWinnerTeamId() + ", amount=" + hackathon.getPrizeAmount(), null);
         }
         // REVIEW è il normale pagamento; CLOSED permette il recupero di eventi storici non pagati.
         if (hackathon.getStatus() != HackathonStatus.REVIEW && !hackathon.isClosed()) {
@@ -390,19 +471,56 @@ public class HackathonController {
 
         if (hackathon.getPrizeAmount().signum() < 0) throw new IllegalStateException("Premio non valido");
         boolean zeroPrize = hackathon.getPrizeAmount().signum() == 0;
-        boolean paid = zeroPrize || paymentSystem.payPrize(hackathonId, hackathon.getPrizeAmount(), winnerTeamName);
+        boolean paid = zeroPrize;
+        String receipt = zeroPrize ? "ZERO-" + hackathonId : null;
+        String error = null;
+        if (!zeroPrize) {
+            try {
+                paid = paymentSystem.payPrize(hackathonId, hackathon.getPrizeAmount(), winnerTeamName);
+                if (paid) {
+                    receipt = paymentSystem.getLastReceiptId();
+                } else {
+                    error = paymentSystem.getLastErrorMessage();
+                }
+            } catch (RuntimeException ex) {
+                throw new PrizeServiceUnavailableException(winnerTeamId, ex);
+            }
+        }
+
         if (paid) {
             hackathon.markPrizePaid();
-            hackathon.setPrizeReceiptId(zeroPrize ? "ZERO-" + hackathonId : paymentSystem.getLastReceiptId());
-            if (!hackathon.isClosed()) hackathon.changeStatus(HackathonStatus.CLOSED);
+            hackathon.setPrizeReceiptId(receipt);
+            if (!hackathon.isClosed()) {
+                hackathon.changeStatus(HackathonStatus.CLOSED);
+            }
             hackathonRepository.save(hackathon);
-            return "Pagamento premio completato: receipt=" + hackathon.getPrizeReceiptId() + ", teamId=" + winnerTeamId
-                    + ", teamName=" + winnerTeamName
-                    + ", amount=" + hackathon.getPrizeAmount();
+            return prizeResult(hackathon, "Pagamento premio completato: receipt=" + receipt + ", teamId=" + winnerTeamId
+                    + ", teamName=" + winnerTeamName + ", amount=" + hackathon.getPrizeAmount(), null);
         }
-        return "Pagamento premio fallito: teamId=" + winnerTeamId
-                + ", teamName=" + winnerTeamName
-                + ", amount=" + hackathon.getPrizeAmount();
+        return prizeResult(hackathon, "Pagamento premio fallito: teamId=" + winnerTeamId + ", teamName=" + winnerTeamName
+                + ", amount=" + hackathon.getPrizeAmount(), error);
+    }
+
+    private PrizeResult prizeResult(Hackathon event, String message, String error) {
+        return new PrizeResult(message, event.getWinnerTeamId(), event.isPrizePaid(), event.getPrizeReceiptId(),
+                event.getStatus(), error);
+    }
+
+    public record PrizeResult(String result, Long winnerTeamId, boolean prizePaid, String receiptId,
+                              HackathonStatus phase, String lastErrorMessage) {
+    }
+
+    public static class PrizeServiceUnavailableException extends IllegalStateException {
+        private final long winnerTeamId;
+
+        public PrizeServiceUnavailableException(long winnerTeamId, RuntimeException cause) {
+            super("Servizio di pagamento indisponibile. Il premio resta da erogare.", cause);
+            this.winnerTeamId = winnerTeamId;
+        }
+
+        public long winnerTeamId() {
+            return winnerTeamId;
+        }
     }
 
     // Verifica che lo staff sia organizer dell'hackathon.

@@ -12,6 +12,7 @@ import it.unicam.hackhub.repository.UserRepository;
 import java.time.LocalDateTime;
 import java.util.Optional;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class SubmissionController {
@@ -30,8 +31,28 @@ public class SubmissionController {
         this.userRepository = userRepository;
     }
 
-    // Crea o aggiorna la submission del team dell'utente corrente.
-    public Submission submitOrUpdate(long currentUserId, long teamId, String content) {
+    @Transactional
+    public Submission createSubmission(long currentUserId, long teamId, String content) {
+        TeamRegistration registration = validateSubmission(currentUserId, teamId, content);
+        long registrationId = registration.getRegistrationId();
+        if (submissionRepository.findByRegistrationId(registrationId).isPresent()) {
+            throw new IllegalStateException("Sottomissione già inviata. Apri Modifica sottomissione.");
+        }
+        LocalDateTime now = LocalDateTime.now();
+        return submissionRepository.save(new Submission(0L, registrationId, content, now, now));
+    }
+
+    @Transactional
+    public Submission updateSubmission(long currentUserId, long teamId, String content) {
+        TeamRegistration registration = validateSubmission(currentUserId, teamId, content);
+        Submission existing = submissionRepository.findByRegistrationId(registration.getRegistrationId())
+                .orElseThrow(() -> new IllegalStateException("Nessuna sottomissione. Apri Invio sottomissione."));
+        existing.setContent(content);
+        existing.setLastUpdatedAt(LocalDateTime.now());
+        return submissionRepository.save(existing);
+    }
+
+    private TeamRegistration validateSubmission(long currentUserId, long teamId, String content) {
         if (teamId <= 0) {
             throw new IllegalArgumentException("Team not found");
         }
@@ -47,6 +68,7 @@ public class SubmissionController {
         }
 
         TeamRegistration registration = teamRegistrationRepository.findByTeamId(teamId)
+                .flatMap(value -> teamRegistrationRepository.findByIdForUpdate(value.getRegistrationId()))
                 .orElseThrow(() -> new IllegalArgumentException("Team is not registered to any hackathon"));
         // Un team espulso non puo' inviare o modificare submission.
         if (registration.isExpelled()) {
@@ -64,22 +86,7 @@ public class SubmissionController {
             throw new IllegalStateException("Scadenza invio sottomissione superata.");
         }
 
-        // Se esiste gia', la aggiorno; altrimenti creo la prima submission.
-        Submission submission = submissionRepository.findByRegistrationId(registration.getRegistrationId())
-                .map(existing -> {
-                    existing.setContent(content);
-                    existing.setLastUpdatedAt(now);
-                    return existing;
-                })
-                .orElseGet(() -> new Submission(
-                        0L,
-                        registration.getRegistrationId(),
-                        content,
-                        now,
-                        now
-                ));
-
-        return submissionRepository.save(submission);
+        return registration;
     }
 
     // Restituisce la submission del team, se presente.

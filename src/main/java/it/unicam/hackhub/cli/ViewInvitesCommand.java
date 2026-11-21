@@ -64,12 +64,22 @@ public class ViewInvitesCommand implements Command {
                 return;
             }
 
-            if (!askYesNo("Vuoi gestire un invito? (y/n)")) {
+            if (!askYesNo("Vuoi consultare un invito? (y/n)")) {
                 return;
             }
 
             long selectedInvitationId = readInvitationId(invitationIds);
+            var selected = invitations.stream()
+                    .filter(invitation -> invitation.invitationId() == selectedInvitationId)
+                    .findFirst().orElseThrow();
+            System.out.println("Team: " + selected.teamName() + " | Stato: " + selected.status());
+            if (!"PENDING".equals(selected.status())) {
+                return;
+            }
             String action = readAction();
+            if (!askYesNo("Confermi la decisione? (y/n)")) {
+                return;
+            }
 
             boolean success;
             if ("ACCEPT".equals(action)) {

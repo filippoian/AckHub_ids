@@ -71,11 +71,18 @@ public class AuthController {
 
     @Transactional
     public synchronized RegistrationResult registerUser(String userName, String password) {
+        return registerUser(userName, password, null);
+    }
+
+    @Transactional
+    public synchronized RegistrationResult registerUser(String userName, String password, String email) {
+        String normalizedEmail = normalizeEmail(email);
         if (isBlank(userName) || isBlank(password)) throw new IllegalArgumentException("Username e password obbligatori");
         String name = userName.trim();
         if (userRepository.findByUserName(name).isPresent()) throw new IllegalStateException("Username già utilizzato");
         String code = recoveryCodeGenerator.generate();
         User user = new User(0L, name, PasswordHasher.hashPassword(password), null);
+        user.setEmail(normalizedEmail);
         user.setRecoveryCodeHash(PasswordHasher.hashPassword(code));
         User saved = userRepository.save(user);
         return new RegistrationResult(new UserProfile(saved.getUserId(), saved.getUserName(), saved.getEmail(), saved.getTeamId()), code);
@@ -98,9 +105,7 @@ public class AuthController {
         String name = userName.trim();
         if (userRepository.findByUserName(name).filter(other -> other.getUserId() != currentUserId).isPresent())
             throw new IllegalArgumentException("Username già utilizzato");
-        String normalizedEmail = isBlank(email) ? null : email.trim();
-        if (normalizedEmail != null && !normalizedEmail.matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+"))
-            throw new IllegalArgumentException("Email non valida");
+        String normalizedEmail = normalizeEmail(email);
         if (newPassword != null && isBlank(newPassword)) throw new IllegalArgumentException("Nuova password non valida");
         String hash = newPassword == null ? user.getPasswordHash() : PasswordHasher.hashPassword(newPassword);
         user.setUserName(name);
@@ -195,6 +200,13 @@ public class AuthController {
             return LoginResult.invalidPassword();
         }
         return LoginResult.staffAuthenticated(staff.getStaffId());
+    }
+
+    private String normalizeEmail(String email) {
+        String normalizedEmail = isBlank(email) ? null : email.trim();
+        if (normalizedEmail != null && !normalizedEmail.matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+"))
+            throw new IllegalArgumentException("Email non valida");
+        return normalizedEmail;
     }
 
     private boolean isBlank(String value) {

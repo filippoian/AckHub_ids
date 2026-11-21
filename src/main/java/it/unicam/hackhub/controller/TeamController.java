@@ -68,6 +68,21 @@ public class TeamController {
     }
 
     @org.springframework.transaction.annotation.Transactional
+    public Invitation inviteUserByUsername(long currentUserId, String username) {
+        if (username == null || username.isBlank()) {
+            throw new IllegalArgumentException("Username del destinatario obbligatorio");
+        }
+        Long teamId = getTeamIdOfUser(currentUserId);
+        if (teamId == null) {
+            throw new IllegalStateException("Non appartieni a un team");
+        }
+        long invitedUserId = userRepository.findByUserName(username.trim())
+                .map(User::getUserId)
+                .orElseThrow(() -> new IllegalArgumentException("Destinatario non trovato"));
+        return inviteUser(currentUserId, teamId, invitedUserId);
+    }
+
+    @org.springframework.transaction.annotation.Transactional
     public List<Invitation> inviteUsers(long currentUserId, long teamId, List<Long> invitedUserIds) {
         requireMember(currentUserId, teamId);
         assertTeamModifiable(teamId);
@@ -222,14 +237,10 @@ public class TeamController {
             return false;
         }
 
-        Optional<User> invitedUserOpt = userRepository.findById(invitation.getInvitedUserId());
-        if (invitedUserOpt.isEmpty()) {
-            return false;
-        }
-
-        User invitedUser = invitedUserOpt.get();
+        User invitedUser = userRepository.findById(currentUserId).filter(User::isActive)
+                .orElseThrow(() -> new IllegalStateException("Il destinatario non ha un account attivo"));
         if (invitedUser.getTeamId() != null) {
-            return false;
+            throw new IllegalStateException("Il destinatario appartiene già a un team");
         }
 
         assertTeamModifiable(invitation.getTeamId());

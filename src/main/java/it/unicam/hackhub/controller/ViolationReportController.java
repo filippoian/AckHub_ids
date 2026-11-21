@@ -49,32 +49,47 @@ public class ViolationReportController {
         }
 
         return hackathonIds.stream()
-                .filter(id -> hackathonRepository.findById(id).isPresent())
-                .map(hackathonId -> {
-                    Hackathon hackathon = hackathonRepository.findById(hackathonId).orElse(null);
-                    return new MentorHackathonOption(
-                            hackathonId,
-                            hackathon == null ? "N/A" : safe(hackathon.getHackathonName())
-                    );
-                })
+                .flatMap(id -> hackathonRepository.findById(id).stream())
+                .filter(event -> event.getStatus() == HackathonStatus.RUNNING)
+                .map(event -> new MentorHackathonOption(event.getHackathonId(), safe(event.getHackathonName())))
                 .toList();
+    }
+
+    private Hackathon requireMentorAssignment(long currentStaffId, long hackathonId) {
+        Hackathon event = hackathonRepository.findById(hackathonId)
+                .orElseThrow(() -> new IllegalArgumentException("Hackathon non trovato"));
+        boolean assigned = staffAssignmentRepository.findByHackathonIdAndRole(hackathonId, StaffRole.MENTOR)
+                .stream().anyMatch(assignment -> assignment.getStaffId() == currentStaffId);
+        if (!assigned) {
+            throw new IllegalArgumentException("Solo il mentore assegnato può accedere alle segnalazioni");
+        }
+        return event;
+    }
+
+    public List<ViolationReport> listOwnReports(long currentStaffId, long hackathonId) {
+        requireMentorAssignment(currentStaffId, hackathonId);
+        return violationReportRepository.findByHackathonId(hackathonId).stream()
+                .filter(report -> report.getMentorStaffId() == currentStaffId)
+                .toList();
+    }
+
+    public ViolationReport viewOwnReport(long currentStaffId, long hackathonId, long reportId) {
+        return listOwnReports(currentStaffId, hackathonId).stream()
+                .filter(report -> report.getReportId() == reportId)
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("Segnalazione personale non trovata"));
     }
 
     // Elenca i team segnalabili in un hackathon dove il mentor e' assegnato.
     public List<ReportTeamOption> listReportableTeams(long currentStaffId, long hackathonId) {
-        boolean mentorAssigned = false;
-        for (StaffAssignment assignment : staffAssignmentRepository.findByHackathonId(hackathonId)) {
-            if (assignment.getRole() == StaffRole.MENTOR && assignment.getStaffId() == currentStaffId) {
-                mentorAssigned = true;
-                break;
-            }
-        }
-        if (!mentorAssigned) {
-            throw new IllegalArgumentException("Comando disponibile solo per MENTOR.");
+        Hackathon event = requireMentorAssignment(currentStaffId, hackathonId);
+        if (event.getStatus() != HackathonStatus.RUNNING) {
+            throw new IllegalStateException("Le segnalazioni si inviano durante la gara");
         }
 
         List<TeamRegistration> registrations = teamRegistrationRepository.findByHackathonId(hackathonId);
         return registrations.stream()
+                .filter(registration -> !registration.isExpelled())
                 .map(registration -> {
                     Team team = teamRepository.findById(registration.getTeamId()).orElse(null);
                     return new ReportTeamOption(

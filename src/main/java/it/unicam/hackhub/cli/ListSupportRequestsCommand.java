@@ -140,6 +140,10 @@ public class ListSupportRequestsCommand implements Command {
         System.out.println("createdAt: " + request.createdAt());
         System.out.println("MESSAGE:");
         System.out.println(request.message() == null ? "" : request.message());
+        for (var proposal : request.proposals()) {
+            System.out.println("Proposta " + proposal.proposalId() + " | " + proposal.proposedStart() + " – "
+                    + proposal.proposedEnd() + " | " + (proposal.booked() ? "prenotata" : "non prenotata"));
+        }
     }
 
     private String safe(String value) {

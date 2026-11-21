@@ -63,10 +63,12 @@ public class ListReportsCommand implements Command {
                         String.valueOf(report.getReportId()),
                         String.valueOf(report.getTeamId()),
                         String.valueOf(report.getCreatedAt()),
+                        String.valueOf(report.getMentorStaffId()),
+                        safe(report.getDescription()),
                         report.getDecision() == null ? "PENDING" : report.getDecision()
                 ));
             }
-            TablePrinter.print(List.of("REPORT_ID", "TEAM_ID", "CREATED_AT", "DECISION"), rows);
+            TablePrinter.print(List.of("REPORT_ID", "TEAM_ID", "CREATED_AT", "MENTORE", "DESCRIZIONE", "DECISIONE"), rows);
         } catch (OperationCancelledException ex) {
             System.out.println("Operazione annullata.");
         } catch (IllegalArgumentException ex) {

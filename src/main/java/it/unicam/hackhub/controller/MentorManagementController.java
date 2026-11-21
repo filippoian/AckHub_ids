@@ -83,6 +83,14 @@ public class MentorManagementController {
         return result;
     }
 
+    public MentorAssignmentView viewMentorAssignments(long currentStaffId, long hackathonId) {
+        List<MentorCandidateView> candidates = listMentorCandidates(currentStaffId, hackathonId);
+        return new MentorAssignmentView(staffAssignmentRepository.findByHackathonId(hackathonId), candidates);
+    }
+
+    public record MentorAssignmentView(List<StaffAssignment> assignments, List<MentorCandidateView> candidates) {
+    }
+
     // Restituisce i candidati mentor non ancora assegnati a quell'hackathon.
     public List<MentorCandidateView> listMentorCandidates(long currentStaffId, long hackathonId) {
         Hackathon event = hackathonRepository.findById(hackathonId)

@@ -3,6 +3,7 @@ package it.unicam.hackhub.cli;
 import it.unicam.hackhub.controller.HackathonController;
 import it.unicam.hackhub.model.Hackathon;
 
+import java.util.List;
 import java.util.Optional;
 
 public class ProclaimWinnerCommand implements Command {
@@ -38,38 +39,46 @@ public class ProclaimWinnerCommand implements Command {
             }
 
             long hackathonId = inputHelper.readLong("Hackathon id");
-            Hackathon hackathon = hackathonController.getHackathonDetails(hackathonId)
-                    .orElseThrow(() -> new IllegalArgumentException("Hackathon not found"));
-
-            if (hackathon.isClosed()) {
-                if (hackathon.getWinnerTeamId() == null) {
-                    System.out.println(
-                            "Hackathon gia CLOSED ma vincitore non impostato. Usa set-winner quando l'hackathon e in REVIEW."
-                    );
-                    return;
+            var preview = hackathonController.viewProclamation(currentStaffId.get(), hackathonId);
+            if (preview.winnerTeamId() != null) {
+                System.out.println("Vincitore già proclamato: team " + preview.winnerTeamId());
+                if (preview.prizePaid()) {
+                    System.out.println("Premio già erogato. Ricevuta: " + preview.receiptId());
+                } else if ("s".equalsIgnoreCase(inputHelper.readNonBlank("Ritentare l’erogazione? (s/n)").trim())) {
+                    System.out.println(hackathonController.payPrize(currentStaffId.get(), hackathonId));
                 }
-                String receipt = hackathonController.payPrize(currentStaffId.get(), hackathonId);
-                System.out.println(receipt);
                 return;
             }
 
-            if (!hackathon.canEvaluate()) {
-                System.out.println("Proclamazione vincitore disponibile solo in REVIEW.");
+            var rows = preview.teams().stream()
+                    .map(team -> List.of(String.valueOf(team.teamId()),
+                            team.teamName() == null ? "-" : team.teamName(),
+                            team.expelled() ? "Espulso" : team.isEligible() ? "Candidato" : "Non candidabile",
+                            team.submissionId() == null ? "-" : team.submissionId().toString(),
+                            team.finalScore() == null ? "-" : team.finalScore().toString(),
+                            team.pendingWarnings().toString()))
+                    .toList();
+            TablePrinter.print(List.of("TEAM_ID", "TEAM", "STATO", "SOTTOMISSIONE", "VOTO", "PENALITÀ MANCANTI"), rows);
+            if (!preview.canProclaim()) {
+                System.out.println("Proclamazione non disponibile. Controlla fase, candidati, valutazioni e penalità.");
                 return;
             }
 
-            long teamId = inputHelper.readLong("Team id");
+            long teamId = inputHelper.readLong("Team vincitore");
+            if (preview.teams().stream().noneMatch(team -> team.teamId() == teamId && team.isEligible())) {
+                System.out.println("Il team selezionato non è candidabile.");
+                return;
+            }
+            if (!"s".equalsIgnoreCase(inputHelper.readNonBlank("Confermi la proclamazione? (s/n)").trim())) {
+                return;
+            }
 
-            Hackathon afterWinner = hackathonController.setWinner(currentStaffId.get(), hackathonId, teamId);
-            System.out.println(
-                    "Vincitore impostato: hackathon "
-                            + afterWinner.getHackathonId()
-                            + " -> team "
-                            + afterWinner.getWinnerTeamId()
-            );
-
-            String receipt = hackathonController.payPrize(currentStaffId.get(), hackathonId);
-            System.out.println(receipt);
+            Hackathon declared = hackathonController.setWinner(currentStaffId.get(), hackathonId, teamId);
+            System.out.println("Vincitore proclamato: team " + declared.getWinnerTeamId());
+            System.out.println(hackathonController.payPrize(currentStaffId.get(), hackathonId));
+            Hackathon result = hackathonController.getHackathonDetails(hackathonId).orElseThrow();
+            System.out.println("Fase: " + result.getStatus() + " | Premio: "
+                    + (result.isPrizePaid() ? "erogato" : "da erogare"));
         } catch (OperationCancelledException ex) {
             System.out.println("Operazione annullata.");
         } catch (IllegalArgumentException | IllegalStateException ex) {

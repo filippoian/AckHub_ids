@@ -3,8 +3,6 @@ package it.unicam.hackhub.cli;
 import it.unicam.hackhub.controller.EvaluationController;
 import it.unicam.hackhub.controller.SubmissionAccessController;
 import it.unicam.hackhub.model.Evaluation;
-import it.unicam.hackhub.model.Submission;
-import it.unicam.hackhub.model.enums.StaffRole;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -17,11 +15,20 @@ public class EvaluateSubmissionCommand implements Command {
     private final EvaluationController evaluationController;
     private final SessionContext sessionContext;
     private final InputHelper inputHelper;
+    private final boolean update;
 
     public EvaluateSubmissionCommand(SubmissionAccessController submissionAccessController,
                                      EvaluationController evaluationController,
                                      SessionContext sessionContext,
                                      InputHelper inputHelper) {
+        this(submissionAccessController, evaluationController, sessionContext, inputHelper, false);
+    }
+
+    public EvaluateSubmissionCommand(SubmissionAccessController submissionAccessController,
+                                     EvaluationController evaluationController,
+                                     SessionContext sessionContext,
+                                     InputHelper inputHelper, boolean update) {
+        this.update = update;
         this.submissionAccessController = submissionAccessController;
         this.evaluationController = evaluationController;
         this.sessionContext = sessionContext;
@@ -30,7 +37,7 @@ public class EvaluateSubmissionCommand implements Command {
 
     @Override
     public String name() {
-        return "evaluate-submission";
+        return update ? "update-evaluation" : "evaluate-submission";
     }
 
     @Override
@@ -48,49 +55,55 @@ public class EvaluateSubmissionCommand implements Command {
             }
 
             List<SubmissionAccessController.AssignedHackathonView> judgeHackathons =
-                    submissionAccessController.listAssignedHackathons(currentStaffId.get()).stream()
-                            .filter(hackathon -> hackathon.roles() != null && hackathon.roles().contains(StaffRole.JUDGE))
-                            .toList();
+                    submissionAccessController.listEvaluatableHackathons(currentStaffId.get());
             if (judgeHackathons.isEmpty()) {
-                System.out.println("Non sei assegnato come JUDGE a nessun hackathon.");
+                System.out.println("Nessun hackathon assegnato in valutazione e senza vincitore.");
                 return;
             }
 
             long selectedHackathonId = selectHackathon(judgeHackathons);
             evaluationController.assertHackathonInReviewForJudge(currentStaffId.get(), selectedHackathonId);
 
-            List<Submission> submissions =
-                    submissionAccessController.listSubmissionsForHackathon(currentStaffId.get(), selectedHackathonId);
+            List<SubmissionAccessController.SubmissionView> submissions =
+                    submissionAccessController.listSubmissionViewsForHackathon(currentStaffId.get(), selectedHackathonId);
             if (submissions.isEmpty()) {
-                System.out.println("Nessuna submission per questo hackathon.");
+                System.out.println("Nessuna sottomissione per questo hackathon.");
                 return;
             }
 
             Set<Long> visibleSubmissionIds = new LinkedHashSet<>();
             List<List<String>> rows = new ArrayList<>();
-            for (Submission submission : submissions) {
-                visibleSubmissionIds.add(submission.getSubmissionId());
-                rows.add(List.of(
-                        String.valueOf(submission.getSubmissionId()),
-                        String.valueOf(submission.getRegistrationId()),
-                        String.valueOf(submission.getLastUpdatedAt()),
-                        TablePrinter.truncate(submission.getContent(), 30)
-                ));
+            for (var submission : submissions) {
+                visibleSubmissionIds.add(submission.submissionId());
+                rows.add(List.of(String.valueOf(submission.submissionId()), safe(submission.teamName()),
+                        submission.disciplinaryStatus(), submission.evaluated() ? "SÌ" : "NO"));
             }
-            TablePrinter.print(List.of("SUBMISSION_ID", "REGISTRATION_ID", "UPDATED_AT", "CONTENT"), rows);
+            TablePrinter.print(List.of("SUBMISSION_ID", "TEAM", "STATO DISCIPLINARE", "VALUTATA"), rows);
 
             long submissionId = readSubmissionId(visibleSubmissionIds);
             evaluationController.assertEvaluatable(currentStaffId.get(), submissionId);
+            var existing = evaluationController.viewEvaluation(currentStaffId.get(), submissionId);
+            if (existing.isPresent() != update) {
+                System.out.println(update ? "Valutazione assente. Usa evaluate-submission."
+                        : "Sottomissione già valutata. Usa update-evaluation.");
+                return;
+            }
 
+            var detail = submissionAccessController.getSubmissionDetailForHackathon(
+                    currentStaffId.get(), selectedHackathonId, submissionId).orElseThrow();
+            System.out.println(detail.content());
+            for (var warning : detail.warnings()) {
+                System.out.println("Ammonizione " + warning.reportId() + " | " + warning.reason()
+                        + " | " + (warning.evaluated() ? warning.penalty() : "da valutare con evaluate-warning"));
+            }
+            existing.ifPresent(current -> System.out.println("Voto base: " + current.baseScore()
+                    + " | Giudizio: " + current.comment()));
             int score = readScore();
-            String comment = inputHelper.readLine("Commento");
+            String comment = inputHelper.readNonBlank("Giudizio").trim();
 
-            Evaluation evaluation = evaluationController.evaluateSubmission(
-                    currentStaffId.get(),
-                    submissionId,
-                    score,
-                    comment
-            );
+            Evaluation evaluation = update
+                    ? evaluationController.updateEvaluation(currentStaffId.get(), submissionId, score, comment)
+                    : evaluationController.evaluateSubmission(currentStaffId.get(), submissionId, score, comment);
             System.out.println(
                     "evaluationId=" + evaluation.getEvaluationId()
                             + " | submissionId=" + evaluation.getSubmissionId()

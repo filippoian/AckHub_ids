@@ -55,6 +55,27 @@ public class TeamRegistrationController {
                 .toList();
     }
 
+    public RegistrationPreview viewRegistrationPreview(long currentUserId, long hackathonId) {
+        User user = userRepository.findById(currentUserId).filter(User::isActive)
+                .orElseThrow(() -> new IllegalArgumentException("Utente non trovato"));
+        Long teamId = user.getTeamId();
+        if (teamId == null) {
+            throw new IllegalArgumentException("Non appartieni a un team");
+        }
+        Team team = teamRepository.findById(teamId)
+                .orElseThrow(() -> new IllegalArgumentException("Team non trovato"));
+        Hackathon event = hackathonRepository.findById(hackathonId)
+                .orElseThrow(() -> new IllegalArgumentException("Hackathon non trovato"));
+        var existing = teamRegistrationRepository.findByTeamId(teamId);
+        return new RegistrationPreview(teamId, team.getTeamName(), hackathonId, event.getHackathonName(),
+                event.getMaxTeamSize(), event.getStatus().name(), event.getRegistrationDeadline(), existing.orElse(null));
+    }
+
+    public record RegistrationPreview(long teamId, String teamName, long hackathonId, String hackathonName,
+                                      int maxTeamSize, String phase, LocalDateTime registrationDeadline,
+                                      TeamRegistration existingRegistration) {
+    }
+
     // Registra il team all'hackathon dopo i controlli principali.
     @org.springframework.transaction.annotation.Transactional
     public TeamRegistration registerTeamToHackathon(long currentUserId, long hackathonId) {
@@ -81,12 +102,15 @@ public class TeamRegistrationController {
         }
 
         // Un team puo' risultare registrato a un solo hackathon.
-        if (teamRegistrationRepository.findByTeamId(team.getTeamId()).isPresent()) {
-            throw new IllegalArgumentException("Team is already registered to a hackathon");
-        }
+        teamRegistrationRepository.findByTeamId(team.getTeamId()).ifPresent(existing -> {
+            throw new AlreadyRegisteredException(existing);
+        });
 
         int currentMembers = userRepository.findByTeamId(teamId).size();
         // Se supera il limite, blocchiamo la registrazione.
+        if (currentMembers == 0) {
+            throw new IllegalStateException("Il team deve avere almeno un membro per iscriversi");
+        }
         if (currentMembers > hackathon.getMaxTeamSize()) {
             throw new IllegalStateException("Team troppo numeroso: supera la dimensione massima dell'hackathon.");
         }
@@ -109,6 +133,19 @@ public class TeamRegistrationController {
             return Optional.empty();
         }
         return teamRegistrationRepository.findByTeamId(currentUser.getTeamId());
+    }
+
+    public static class AlreadyRegisteredException extends IllegalArgumentException {
+        private final TeamRegistration registration;
+
+        public AlreadyRegisteredException(TeamRegistration registration) {
+            super("Il team è già iscritto a un hackathon");
+            this.registration = registration;
+        }
+
+        public TeamRegistration registration() {
+            return registration;
+        }
     }
 
     public record HackathonRegistrationOption(long hackathonId,

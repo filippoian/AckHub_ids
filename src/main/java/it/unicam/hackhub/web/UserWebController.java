@@ -8,19 +8,13 @@ import it.unicam.hackhub.controller.SubmissionController;
 import it.unicam.hackhub.controller.SupportController;
 import it.unicam.hackhub.controller.TeamController;
 import it.unicam.hackhub.controller.TeamRegistrationController;
-import it.unicam.hackhub.model.CallBooking;
-import it.unicam.hackhub.model.CallProposal;
 import it.unicam.hackhub.model.Hackathon;
 import it.unicam.hackhub.model.Invitation;
 import it.unicam.hackhub.model.Submission;
 import it.unicam.hackhub.model.SupportRequest;
 import it.unicam.hackhub.model.Team;
 import it.unicam.hackhub.model.TeamRegistration;
-import it.unicam.hackhub.model.User;
-import it.unicam.hackhub.repository.CallProposalRepository;
-import it.unicam.hackhub.repository.SupportRequestRepository;
 import it.unicam.hackhub.repository.TeamRepository;
-import it.unicam.hackhub.repository.UserRepository;
 import it.unicam.hackhub.web.dto.CreateTeamRequest;
 import it.unicam.hackhub.web.session.InMemorySessionStore;
 import it.unicam.hackhub.web.session.SessionAuth;
@@ -50,34 +44,25 @@ public class UserWebController {
     private AuthController authController;
     private final TeamController teamController;
     private final TeamRepository teamRepository;
-    private final UserRepository userRepository;
     private final HackathonController hackathonController;
     private final TeamRegistrationController teamRegistrationController;
     private final SubmissionController submissionController;
     private final SupportController supportController;
-    private final SupportRequestRepository supportRequestRepository;
-    private final CallProposalRepository callProposalRepository;
     private final InMemorySessionStore sessionStore;
 
     public UserWebController(TeamController teamController,
                              TeamRepository teamRepository,
-                             UserRepository userRepository,
                              HackathonController hackathonController,
                              TeamRegistrationController teamRegistrationController,
                              SubmissionController submissionController,
                              SupportController supportController,
-                             SupportRequestRepository supportRequestRepository,
-                             CallProposalRepository callProposalRepository,
                              InMemorySessionStore sessionStore) {
         this.teamController = teamController;
         this.teamRepository = teamRepository;
-        this.userRepository = userRepository;
         this.hackathonController = hackathonController;
         this.teamRegistrationController = teamRegistrationController;
         this.submissionController = submissionController;
         this.supportController = supportController;
-        this.supportRequestRepository = supportRequestRepository;
-        this.callProposalRepository = callProposalRepository;
         this.sessionStore = sessionStore;
     }
 
@@ -106,9 +91,10 @@ public class UserWebController {
     }
 
     @PostMapping("/support/requests/{requestId}/cancel")
-    public void cancelSupportRequest(@RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token,
+    public Map<String, String> cancelSupportRequest(@RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token,
                                       @PathVariable long requestId) {
         supportController.cancelSupportRequest(SessionAuth.requireUserId(sessionStore, token), requestId);
+        return Map.of("status", "CANCELLED");
     }
 
     // Crea un team per l'utente autenticato.
@@ -146,21 +132,8 @@ public class UserWebController {
             @RequestBody InviteUserRequest request,
             @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
         long userId = SessionAuth.requireUserId(sessionStore, token);
-        String invitedUsername = request == null ? null : request.invitedUsername();
-        if (invitedUsername == null || invitedUsername.isBlank()) {
-            throw new IllegalArgumentException("Username invitato non valido");
-        }
-
-        Long teamId = teamController.getTeamIdOfUser(userId);
-        if (teamId == null) {
-            throw new IllegalArgumentException("Non hai un team");
-        }
-
-        long invitedUserId = userRepository.findByUserName(invitedUsername.trim())
-                .map(User::getUserId)
-                .orElseThrow(() -> new IllegalArgumentException("Utente invitato non trovato"));
-
-        Invitation invitation = teamController.inviteUser(userId, teamId, invitedUserId);
+        String username = request == null ? null : request.invitedUsername();
+        Invitation invitation = teamController.inviteUserByUsername(userId, username);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(Map.of("invitationId", invitation.getInvitationId()));
     }
@@ -199,7 +172,7 @@ public class UserWebController {
         if (!done) {
             throw new IllegalArgumentException("Invito non valido o non autorizzato");
         }
-        return Map.of("status", "ok");
+        return Map.of("status", "ok", "invitationStatus", "ACCEPT".equals(action) ? "ACCEPTED" : "DECLINED");
     }
 
     // Mostra gli hackathon ancora registrabili per il team.
@@ -217,6 +190,13 @@ public class UserWebController {
                 .flatMap(Optional::stream)
                 .map(HackathonDto::from)
                 .toList();
+    }
+
+    @GetMapping("/registration/preview/{hackathonId}")
+    public TeamRegistrationController.RegistrationPreview previewRegistration(
+            @PathVariable long hackathonId,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return teamRegistrationController.viewRegistrationPreview(SessionAuth.requireUserId(sessionStore, token), hackathonId);
     }
 
     // Registra il team a un hackathon.
@@ -268,12 +248,7 @@ public class UserWebController {
         long teamId = requireTeamId(userId);
         String content = normalizeContent(request);
 
-        // Qui consento solo il primo invio.
-        if (submissionController.viewMySubmission(teamId).isPresent()) {
-            throw new IllegalStateException("Submission gia inviata: usa update");
-        }
-
-        return SubmissionDto.from(submissionController.submitOrUpdate(userId, teamId, content));
+        return SubmissionDto.from(submissionController.createSubmission(userId, teamId, content));
     }
 
     // Aggiorna una submission gia' esistente.
@@ -285,12 +260,7 @@ public class UserWebController {
         long teamId = requireTeamId(userId);
         String content = normalizeContent(request);
 
-        // Qui invece e' obbligatorio che esista gia' una submission.
-        if (submissionController.viewMySubmission(teamId).isEmpty()) {
-            throw new IllegalStateException("Nessuna submission: usa submit");
-        }
-
-        return SubmissionDto.from(submissionController.submitOrUpdate(userId, teamId, content));
+        return SubmissionDto.from(submissionController.updateSubmission(userId, teamId, content));
     }
 
     // Crea una richiesta supporto per il team corrente.
@@ -314,20 +284,8 @@ public class UserWebController {
     @GetMapping("/support/requests")
     public List<SupportRequestDto> listMySupportRequests(
             @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
-        long userId = SessionAuth.requireUserId(sessionStore, token);
-        Long teamId = teamController.getTeamIdOfUser(userId);
-        if (teamId == null) {
-            throw new IllegalArgumentException("Non hai un team");
-        }
-
-        long hackathonId = teamRegistrationController.getMyRegistration(userId)
-                .orElseThrow(() -> new IllegalArgumentException("Il tuo team non e registrato a nessun hackathon."))
-                .getHackathonId();
-
-        return supportRequestRepository.findByHackathonId(hackathonId).stream()
-                .filter(supportRequest -> supportRequest.getTeamId() == teamId)
-                .sorted((a, b) -> Long.compare(a.getRequestId(), b.getRequestId()))
-                .map(SupportRequestDto::from)
+        return supportController.listTeamSupportRequests(SessionAuth.requireUserId(sessionStore, token)).stream()
+                .map(view -> SupportRequestDto.from(view.request(), view.bookings()))
                 .toList();
     }
 
@@ -341,9 +299,17 @@ public class UserWebController {
                 .toList();
     }
 
+    @GetMapping("/support/requests/{requestId}/call-proposals")
+    public List<CallProposalDto> listProposalsForRequest(
+            @PathVariable long requestId,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return supportController.listAvailableCallProposalsForRequest(SessionAuth.requireUserId(sessionStore, token), requestId)
+                .stream().map(CallProposalDto::from).toList();
+    }
+
     // Prenota una proposta call disponibile.
     @PostMapping("/calls/proposals/{proposalId}/book")
-    public ResponseEntity<CallBookingDto> bookProposal(
+    public ResponseEntity<SupportController.BookingView> bookProposal(
             @PathVariable long proposalId,
             @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
         if (proposalId <= 0) {
@@ -351,17 +317,7 @@ public class UserWebController {
         }
 
         long userId = SessionAuth.requireUserId(sessionStore, token);
-        CallProposal proposal = callProposalRepository.findById(proposalId)
-                .orElseThrow(() -> new IllegalArgumentException("Call proposal non trovata"));
-
-        CallBooking booking = supportController.bookCall(userId, proposalId);
-        CallBookingDto response = new CallBookingDto(
-                booking.getCallId(),
-                booking.getProposalId(),
-                proposal.getProposedStart(),
-                proposal.getProposedEnd(),
-                booking.getMeetingLink()
-        );
+        SupportController.BookingView response = supportController.bookCallForCurrentUser(userId, proposalId);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -523,16 +479,18 @@ public class UserWebController {
             long hackathonId,
             long teamId,
             String message,
-            LocalDateTime createdAt
+            LocalDateTime createdAt,
+            String status,
+            List<SupportController.BookingView> bookings
     ) {
-        private static SupportRequestDto from(SupportRequest supportRequest) {
-            return new SupportRequestDto(
-                    supportRequest.getRequestId(),
-                    supportRequest.getHackathonId(),
-                    supportRequest.getTeamId(),
-                    (supportRequest.isCancelled() ? "[ANNULLATA] " : "[APERTA] ") + supportRequest.getMessage(),
-                    supportRequest.getCreatedAt()
-            );
+        private static SupportRequestDto from(SupportRequest request) {
+            return from(request, List.of());
+        }
+
+        private static SupportRequestDto from(SupportRequest request, List<SupportController.BookingView> bookings) {
+            return new SupportRequestDto(request.getRequestId(), request.getHackathonId(), request.getTeamId(),
+                    (request.isCancelled() ? "[ANNULLATA] " : "[APERTA] ") + request.getMessage(),
+                    request.getCreatedAt(), request.isCancelled() ? "CANCELLED" : "OPEN", bookings);
         }
     }
 
@@ -541,35 +499,13 @@ public class UserWebController {
             long supportRequestId,
             LocalDateTime proposedStart,
             LocalDateTime proposedEnd,
-            boolean booked
+            boolean booked,
+            long mentorStaffId,
+            String mentorName
     ) {
-        private static CallProposalDto from(CallProposal callProposal) {
-            return new CallProposalDto(
-                    callProposal.getProposalId(),
-                    callProposal.getRequestId(),
-                    callProposal.getProposedStart(),
-                    callProposal.getProposedEnd(),
-                    callProposal.isBooked()
-            );
-        }
-
         private static CallProposalDto from(SupportController.CallProposalSummary summary) {
-            return new CallProposalDto(
-                    summary.proposalId(),
-                    summary.requestId(),
-                    summary.proposedStart(),
-                    summary.proposedEnd(),
-                    summary.booked()
-            );
+            return new CallProposalDto(summary.proposalId(), summary.requestId(), summary.proposedStart(),
+                    summary.proposedEnd(), summary.booked(), summary.mentorStaffId(), summary.mentorName());
         }
-    }
-
-    private record CallBookingDto(
-            long callId,
-            long proposalId,
-            LocalDateTime start,
-            LocalDateTime end,
-            String meetingLink
-    ) {
     }
 }

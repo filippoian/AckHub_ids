@@ -38,7 +38,18 @@ public class AdvanceHackathonCommand implements Command {
             }
 
             long hackathonId = inputHelper.readLong("Hackathon id");
-            Hackathon updated = hackathonController.advanceStatus(currentStaffId.get(), hackathonId);
+            var transition = hackathonController.viewPhaseTransition(currentStaffId.get(), hackathonId);
+            System.out.println("Fase attuale: " + transition.current());
+            if (transition.next() == null) {
+                System.out.println(transition.requirement());
+                return;
+            }
+            System.out.println("Prossima fase: " + transition.next() + " | Requisito: " + transition.requirement()
+                    + (transition.availableFrom() == null ? "" : " " + transition.availableFrom()));
+            if (!"s".equalsIgnoreCase(inputHelper.readNonBlank("Confermi il passaggio? (s/n)").trim())) {
+                return;
+            }
+            Hackathon updated = hackathonController.advanceStatus(currentStaffId.get(), hackathonId, transition.next());
             System.out.println("Hackathon " + updated.getHackathonId() + " avanzato a " + updated.getStatus());
         } catch (OperationCancelledException ex) {
             System.out.println("Operazione annullata.");

@@ -41,7 +41,10 @@ public class ViewHackathonCommand implements Command {
             System.out.println("prizeAmount: " + hackathon.getPrizeAmount());
             System.out.println("maxTeamSize: " + hackathon.getMaxTeamSize());
             System.out.println("status: " + hackathon.getStatus());
-            System.out.println("winnerTeamId: " + (hackathon.getWinnerTeamId() == null ? "N/A" : hackathon.getWinnerTeamId()));
+            if (hackathon.getWinnerTeamId() != null) {
+                System.out.println("Vincitore: " + hackathonController.getWinnerTeamName(hackathon)
+                        .orElse("team " + hackathon.getWinnerTeamId()));
+            }
         } catch (OperationCancelledException ex) {
             System.out.println("Operazione annullata.");
         }

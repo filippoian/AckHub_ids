@@ -5,6 +5,7 @@ import it.unicam.hackhub.model.CallBooking;
 import it.unicam.hackhub.model.CallProposal;
 import it.unicam.hackhub.model.Hackathon;
 import it.unicam.hackhub.model.StaffAssignment;
+import it.unicam.hackhub.model.StaffMember;
 import it.unicam.hackhub.model.SupportRequest;
 import it.unicam.hackhub.model.TeamRegistration;
 import it.unicam.hackhub.model.User;
@@ -13,11 +14,11 @@ import it.unicam.hackhub.model.enums.StaffRole;
 import it.unicam.hackhub.repository.CallProposalRepository;
 import it.unicam.hackhub.repository.HackathonRepository;
 import it.unicam.hackhub.repository.StaffAssignmentRepository;
+import it.unicam.hackhub.repository.StaffMemberRepository;
 import it.unicam.hackhub.repository.SupportRequestRepository;
 import it.unicam.hackhub.repository.TeamRegistrationRepository;
 import it.unicam.hackhub.repository.UserRepository;
 
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -31,6 +32,7 @@ public class SupportController {
     private final TeamRegistrationRepository teamRegistrationRepository;
     private final HackathonRepository hackathonRepository;
     private final StaffAssignmentRepository staffAssignmentRepository;
+    private final StaffMemberRepository staffMemberRepository;
     private final CalendarSystem calendarSystem;
 
     public SupportController(SupportRequestRepository supportRequestRepository,
@@ -39,6 +41,7 @@ public class SupportController {
                              TeamRegistrationRepository teamRegistrationRepository,
                              HackathonRepository hackathonRepository,
                              StaffAssignmentRepository staffAssignmentRepository,
+                             StaffMemberRepository staffMemberRepository,
                              CalendarSystem calendarSystem) {
         this.supportRequestRepository = supportRequestRepository;
         this.callProposalRepository = callProposalRepository;
@@ -46,6 +49,7 @@ public class SupportController {
         this.teamRegistrationRepository = teamRegistrationRepository;
         this.hackathonRepository = hackathonRepository;
         this.staffAssignmentRepository = staffAssignmentRepository;
+        this.staffMemberRepository = staffMemberRepository;
         this.calendarSystem = calendarSystem;
     }
 
@@ -55,31 +59,64 @@ public class SupportController {
         return createSupportRequest(currentUserId, context.hackathonId(), message);
     }
 
-    // Elenca le proposte call ancora libere per il team corrente.
     public List<CallProposalSummary> listAvailableCallProposalsForCurrentUser(long currentUserId) {
         UserHackathonContext context = resolveUserHackathonContext(currentUserId);
-        List<CallProposalSummary> summaries = new ArrayList<>();
-
-        List<SupportRequest> teamRequests = supportRequestRepository.findByHackathonId(context.hackathonId()).stream()
-                .filter(request -> request.getTeamId() == context.teamId() && !request.isCancelled())
+        return teamRequests(context).stream()
+                .flatMap(request -> availableProposals(context, request).stream())
                 .toList();
+    }
 
-        for (SupportRequest request : teamRequests) {
-            for (CallProposal proposal : callProposalRepository.findBySupportRequestId(request.getRequestId())) {
-                if (proposal.isBooked() || !proposal.getProposedStart().isAfter(LocalDateTime.now())) {
-                    continue;
-                }
-                summaries.add(new CallProposalSummary(
-                        proposal.getProposalId(),
-                        proposal.getRequestId(),
-                        proposal.getProposedStart(),
-                        proposal.getProposedEnd(),
-                        proposal.isBooked()
-                ));
-            }
+    public List<CallProposalSummary> listAvailableCallProposalsForRequest(long currentUserId, long requestId) {
+        UserHackathonContext context = resolveUserHackathonContext(currentUserId);
+        SupportRequest request = supportRequestRepository.findById(requestId)
+                .filter(found -> found.getTeamId() == context.teamId() && found.getHackathonId() == context.hackathonId())
+                .orElseThrow(() -> new IllegalArgumentException("Richiesta di supporto non disponibile"));
+        return availableProposals(context, request);
+    }
+
+    public List<TeamSupportRequestView> listTeamSupportRequests(long currentUserId) {
+        return teamRequests(resolveUserHackathonContext(currentUserId)).stream()
+                .map(request -> new TeamSupportRequestView(request, bookingsForRequest(request.getRequestId())))
+                .toList();
+    }
+
+    private List<SupportRequest> teamRequests(UserHackathonContext context) {
+        return supportRequestRepository.findByHackathonId(context.hackathonId()).stream()
+                .filter(request -> request.getTeamId() == context.teamId())
+                .sorted(Comparator.comparingLong(SupportRequest::getRequestId))
+                .toList();
+    }
+
+    private List<CallProposalSummary> availableProposals(UserHackathonContext context, SupportRequest request) {
+        if (request.isCancelled() || context.expelled()) {
+            return List.of();
         }
+        Hackathon event = hackathonRepository.findById(context.hackathonId()).orElseThrow();
+        if (event.getStatus() != HackathonStatus.RUNNING) {
+            return List.of();
+        }
+        LocalDateTime now = LocalDateTime.now();
+        return callProposalRepository.findBySupportRequestId(request.getRequestId()).stream()
+                .filter(slot -> !slot.isBooked() && slot.getProposedStart().isAfter(now)
+                        && !slot.getProposedStart().isBefore(event.getStartDate())
+                        && !slot.getProposedEnd().isAfter(event.getEndDate()))
+                .map(this::proposalSummary)
+                .toList();
+    }
 
-        return summaries;
+    private CallProposalSummary proposalSummary(CallProposal proposal) {
+        return new CallProposalSummary(proposal.getProposalId(), proposal.getRequestId(),
+                proposal.getProposedStart(), proposal.getProposedEnd(), proposal.isBooked(),
+                proposal.getMentorStaffId(), staffMemberRepository.findById(proposal.getMentorStaffId())
+                        .map(StaffMember::getStaffName).orElse(null));
+    }
+
+    private List<BookingView> bookingsForRequest(long requestId) {
+        return callProposalRepository.findBySupportRequestId(requestId).stream()
+                .filter(CallProposal::isBooked)
+                .flatMap(proposal -> callProposalRepository.findBookingByProposalId(proposal.getProposalId())
+                        .map(booking -> BookingView.from(booking, proposal)).stream())
+                .toList();
     }
 
     // Restituisce gli hackathon assegnati al mentor corrente.
@@ -104,22 +141,36 @@ public class SupportController {
     // Elenca le richieste supporto visibili al mentor in quell'hackathon.
     public List<SupportRequestView> listSupportRequestsForMentor(long currentStaffId, long hackathonId) {
         hackathonRepository.findById(hackathonId).orElseThrow(() -> new IllegalArgumentException("Hackathon non trovato"));
-        boolean isMentorAssigned = staffAssignmentRepository.findByHackathonId(hackathonId).stream()
-                .anyMatch(assignment -> assignment.getRole() == StaffRole.MENTOR
-                        && assignment.getStaffId() == currentStaffId);
-        if (!isMentorAssigned) {
-            throw new IllegalArgumentException("Not authorized: staff not assigned as mentor");
-        }
+        requireMentor(currentStaffId, hackathonId);
 
         return supportRequestRepository.findByHackathonId(hackathonId).stream()
                 .sorted(Comparator.comparingLong(SupportRequest::getRequestId))
-                .map(request -> new SupportRequestView(
-                        request.getRequestId(),
-                        request.getTeamId(),
-                        request.getCreatedAt(),
-                        (request.isCancelled() ? "[ANNULLATA] " : "[APERTA] ") + request.getMessage()
-                ))
+                .map(this::mentorRequestView)
                 .toList();
+    }
+
+    private SupportRequestView mentorRequestView(SupportRequest request) {
+        String status = request.isCancelled() ? "CANCELLED" : "OPEN";
+        return new SupportRequestView(request.getRequestId(), request.getTeamId(), request.getCreatedAt(),
+                (request.isCancelled() ? "[ANNULLATA] " : "[APERTA] ") + request.getMessage(),
+                status, callProposalRepository.findBySupportRequestId(request.getRequestId()).stream()
+                        .map(this::proposalSummary).toList());
+    }
+
+    public SupportRequestView viewSupportRequestForMentor(long currentStaffId, long hackathonId, long requestId) {
+        requireMentor(currentStaffId, hackathonId);
+        return supportRequestRepository.findById(requestId)
+                .filter(request -> request.getHackathonId() == hackathonId)
+                .map(this::mentorRequestView)
+                .orElseThrow(() -> new IllegalArgumentException("Richiesta di supporto non disponibile"));
+    }
+
+    private void requireMentor(long currentStaffId, long hackathonId) {
+        boolean assigned = staffAssignmentRepository.findByHackathonIdAndRole(hackathonId, StaffRole.MENTOR)
+                .stream().anyMatch(assignment -> assignment.getStaffId() == currentStaffId);
+        if (!assigned) {
+            throw new IllegalArgumentException("Solo il mentore assegnato può accedere alle richieste");
+        }
     }
 
     // Crea una richiesta supporto solo per team attivi e in RUNNING.
@@ -169,21 +220,11 @@ public class SupportController {
             throw new IllegalArgumentException("Intervallo proposta non valido");
         }
 
-        SupportRequest supportRequest = supportRequestRepository.findById(supportRequestId)
+        SupportRequest supportRequest = supportRequestRepository.findByIdForUpdate(supportRequestId)
                 .orElseThrow(() -> new IllegalArgumentException("Support request non trovata"));
         long hackathonId = supportRequest.getHackathonId();
 
-        // Solo mentor assegnati a quell'hackathon possono proporre slot.
-        boolean isMentorAssigned = false;
-        for (StaffAssignment assignment : staffAssignmentRepository.findByHackathonId(hackathonId)) {
-            if (assignment.getRole() == StaffRole.MENTOR && assignment.getStaffId() == currentStaffId) {
-                isMentorAssigned = true;
-                break;
-            }
-        }
-        if (!isMentorAssigned) {
-            throw new IllegalArgumentException("Not authorized: only mentor can create call proposal");
-        }
+        requireMentor(currentStaffId, hackathonId);
 
         Hackathon event = hackathonRepository.findById(hackathonId).orElseThrow(() -> new IllegalArgumentException("Hackathon non trovato"));
         TeamRegistration registration = teamRegistrationRepository.findByTeamIdAndHackathonId(supportRequest.getTeamId(), hackathonId)
@@ -213,11 +254,7 @@ public class SupportController {
     public synchronized CallBooking bookCall(long currentUserId, long proposalId) {
         CallProposal proposal = callProposalRepository.findById(proposalId)
                 .orElseThrow(() -> new IllegalArgumentException("Call proposal non trovata"));
-        if (proposal.isBooked()) {
-            throw new IllegalStateException("Call proposal gia prenotata");
-        }
-
-        SupportRequest supportRequest = supportRequestRepository.findById(proposal.getRequestId())
+        SupportRequest supportRequest = supportRequestRepository.findByIdForUpdate(proposal.getRequestId())
                 .orElseThrow(() -> new IllegalArgumentException("Support request non trovata"));
 
         User user = userRepository.findById(currentUserId).filter(User::isActive)
@@ -228,6 +265,10 @@ public class SupportController {
         }
         if (teamId != supportRequest.getTeamId()) {
             throw new IllegalArgumentException("Non autorizzato: richiesta di un altro team");
+        }
+
+        if (proposal.isBooked() || callProposalRepository.findBookingByProposalId(proposalId).isPresent()) {
+            throw new IllegalStateException("Proposta già prenotata");
         }
 
         TeamRegistration registration = teamRegistrationRepository
@@ -270,15 +311,30 @@ public class SupportController {
     }
 
     @org.springframework.transaction.annotation.Transactional
+    public BookingView bookCallForCurrentUser(long currentUserId, long proposalId) {
+        CallBooking booking = bookCall(currentUserId, proposalId);
+        CallProposal proposal = callProposalRepository.findById(proposalId).orElseThrow();
+        return BookingView.from(booking, proposal);
+    }
+
+    @org.springframework.transaction.annotation.Transactional
     public synchronized void cancelSupportRequest(long currentUserId, long requestId) {
         User user = userRepository.findById(currentUserId).filter(User::isActive)
                 .orElseThrow(() -> new IllegalArgumentException("Utente non disponibile"));
-        SupportRequest request = supportRequestRepository.findById(requestId)
+        SupportRequest request = supportRequestRepository.findByIdForUpdate(requestId)
                 .orElseThrow(() -> new IllegalArgumentException("Richiesta non trovata"));
         if (user.getTeamId() == null || user.getTeamId() != request.getTeamId())
             throw new IllegalArgumentException("Richiesta di un altro team");
-        if (request.isCancelled() || callProposalRepository.findBySupportRequestId(requestId).stream().anyMatch(CallProposal::isBooked))
-            throw new IllegalStateException("Richiesta annullata o con call già prenotata");
+        if (request.isCancelled()) {
+            throw new IllegalStateException("Richiesta già annullata");
+        }
+        List<BookingView> bookings = bookingsForRequest(requestId);
+        if (!bookings.isEmpty()) {
+            throw new SupportAlreadyBookedException(bookings);
+        }
+        if (callProposalRepository.findBySupportRequestId(requestId).stream().anyMatch(CallProposal::isBooked)) {
+            throw new IllegalStateException("Richiesta con call già prenotata");
+        }
         request.setCancelled(true);
         supportRequestRepository.save(request);
     }
@@ -294,7 +350,7 @@ public class SupportController {
 
         TeamRegistration registration = teamRegistrationRepository.findByTeamId(teamId)
                 .orElseThrow(() -> new IllegalArgumentException("Il tuo team non e registrato a nessun hackathon."));
-        return new UserHackathonContext(teamId, registration.getHackathonId());
+        return new UserHackathonContext(teamId, registration.getHackathonId(), registration.isExpelled());
     }
 
     private String safe(String value) {
@@ -305,7 +361,9 @@ public class SupportController {
                                       long requestId,
                                       LocalDateTime proposedStart,
                                       LocalDateTime proposedEnd,
-                                      boolean booked) {
+                                      boolean booked,
+                                      long mentorStaffId,
+                                      String mentorName) {
     }
 
     public record MentorHackathonView(long hackathonId,
@@ -317,9 +375,34 @@ public class SupportController {
     public record SupportRequestView(long requestId,
                                      long teamId,
                                      LocalDateTime createdAt,
-                                     String message) {
+                                     String message,
+                                     String status,
+                                     List<CallProposalSummary> proposals) {
     }
 
-    private record UserHackathonContext(long teamId, long hackathonId) {
+    public record TeamSupportRequestView(SupportRequest request, List<BookingView> bookings) {
+    }
+
+    public record BookingView(long callId, long proposalId, LocalDateTime start, LocalDateTime end, String meetingLink) {
+        private static BookingView from(CallBooking booking, CallProposal proposal) {
+            return new BookingView(booking.getCallId(), proposal.getProposalId(),
+                    proposal.getProposedStart(), proposal.getProposedEnd(), booking.getMeetingLink());
+        }
+    }
+
+    public static class SupportAlreadyBookedException extends IllegalStateException {
+        private final List<BookingView> bookings;
+
+        public SupportAlreadyBookedException(List<BookingView> bookings) {
+            super("Richiesta con call già prenotata");
+            this.bookings = List.copyOf(bookings);
+        }
+
+        public List<BookingView> bookings() {
+            return bookings;
+        }
+    }
+
+    private record UserHackathonContext(long teamId, long hackathonId, boolean expelled) {
     }
 }

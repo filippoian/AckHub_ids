@@ -8,6 +8,10 @@ import java.util.Optional;
 public interface TeamRegistrationRepository {
     Optional<TeamRegistration> findById(long registrationId);
 
+    default Optional<TeamRegistration> findByIdForUpdate(long registrationId) {
+        return findById(registrationId);
+    }
+
     Optional<TeamRegistration> findByTeamId(long teamId);
 
     Optional<TeamRegistration> findByTeamIdAndHackathonId(long teamId, long hackathonId);

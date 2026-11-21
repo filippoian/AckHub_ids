@@ -24,7 +24,7 @@ public class HackathonWebController {
     @GetMapping
     public List<HackathonDto> listHackathons() {
         return hackathonController.listHackathons().stream()
-                .map(HackathonDto::from)
+                .map(event -> HackathonDto.from(event, null))
                 .toList();
     }
 
@@ -32,7 +32,7 @@ public class HackathonWebController {
     @GetMapping("/{id}")
     public HackathonDto getHackathon(@PathVariable long id) {
         return hackathonController.getHackathonDetails(id)
-                .map(HackathonDto::from)
+                .map(event -> HackathonDto.from(event, hackathonController.getWinnerTeamName(event).orElse(null)))
                 .orElseThrow(() -> new IllegalArgumentException("Hackathon not found"));
     }
 
@@ -48,9 +48,10 @@ public class HackathonWebController {
             LocalDateTime submissionDeadline,
             BigDecimal prizeAmount,
             int maxTeamSize,
-            Long winnerTeamId
+            Long winnerTeamId,
+            String winnerTeamName
     ) {
-        private static HackathonDto from(Hackathon hackathon) {
+        private static HackathonDto from(Hackathon hackathon, String winnerTeamName) {
             return new HackathonDto(
                     hackathon.getHackathonId(),
                     hackathon.getHackathonName(),
@@ -63,7 +64,8 @@ public class HackathonWebController {
                     hackathon.getSubmissionDeadline(),
                     hackathon.getPrizeAmount(),
                     hackathon.getMaxTeamSize(),
-                    hackathon.getWinnerTeamId()
+                    hackathon.getWinnerTeamId(),
+                    winnerTeamName
             );
         }
     }

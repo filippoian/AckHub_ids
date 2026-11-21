@@ -42,8 +42,8 @@ public class InviteUserCommand implements Command {
                 return;
             }
 
-            long invitedUserId = inputHelper.readLong("Invited userId");
-            Invitation invitation = teamController.inviteUser(currentUserId.get(), teamId, invitedUserId);
+            String invitedUsername = inputHelper.readNonBlank("Username del destinatario");
+            Invitation invitation = teamController.inviteUserByUsername(currentUserId.get(), invitedUsername);
             System.out.println("Invito creato. invitationId=" + invitation.getInvitationId());
         } catch (OperationCancelledException ex) {
             System.out.println("Operazione annullata.");

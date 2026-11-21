@@ -7,6 +7,10 @@ import java.util.Optional;
 
 public interface SupportRequestRepository {
     Optional<SupportRequest> findById(long requestId);
+
+    default Optional<SupportRequest> findByIdForUpdate(long requestId) {
+        return findById(requestId);
+    }
     List<SupportRequest> findAll();
     List<SupportRequest> findByHackathonId(long hackathonId);
     SupportRequest save(SupportRequest supportRequest);

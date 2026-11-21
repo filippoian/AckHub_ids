@@ -6,12 +6,12 @@ import it.unicam.hackhub.controller.MentorManagementController;
 import it.unicam.hackhub.controller.SubmissionAccessController;
 import it.unicam.hackhub.controller.SupportController;
 import it.unicam.hackhub.controller.ViolationReportController;
-import it.unicam.hackhub.external.PaymentSystem;
 import it.unicam.hackhub.model.CallProposal;
 import it.unicam.hackhub.model.Evaluation;
 import it.unicam.hackhub.model.Hackathon;
 import it.unicam.hackhub.model.StaffMember;
 import it.unicam.hackhub.model.ViolationReport;
+import it.unicam.hackhub.model.enums.HackathonStatus;
 import it.unicam.hackhub.repository.StaffMemberRepository;
 import it.unicam.hackhub.web.dto.CreateHackathonRequest;
 import it.unicam.hackhub.web.dto.UpdateHackathonRequest;
@@ -48,7 +48,6 @@ public class StaffWebController {
     private final EvaluationController evaluationController;
     private final HackathonController hackathonController;
     private final MentorManagementController mentorManagementController;
-    private final PaymentSystem paymentSystem;
     private final SupportController supportController;
     private final ViolationReportController violationReportController;
     private final InMemorySessionStore sessionStore;
@@ -58,7 +57,6 @@ public class StaffWebController {
                               EvaluationController evaluationController,
                               HackathonController hackathonController,
                               MentorManagementController mentorManagementController,
-                              PaymentSystem paymentSystem,
                               SupportController supportController,
                               ViolationReportController violationReportController,
                               InMemorySessionStore sessionStore) {
@@ -67,7 +65,6 @@ public class StaffWebController {
         this.evaluationController = evaluationController;
         this.hackathonController = hackathonController;
         this.mentorManagementController = mentorManagementController;
-        this.paymentSystem = paymentSystem;
         this.supportController = supportController;
         this.violationReportController = violationReportController;
         this.sessionStore = sessionStore;
@@ -112,7 +109,7 @@ public class StaffWebController {
                 .orElseThrow(() -> new IllegalArgumentException("Submission not found"));
     }
 
-    // Registra o aggiorna la valutazione di una submission.
+    // Registra la prima valutazione della sottomissione.
     @PostMapping("/hackathons/{hackathonId}/submissions/{submissionId}/evaluation")
     public EvaluationResponse evaluateSubmission(
             @PathVariable long hackathonId,
@@ -134,6 +131,22 @@ public class StaffWebController {
         ));
     }
 
+    @PutMapping("/hackathons/{hackathonId}/submissions/{submissionId}/evaluation")
+    public EvaluationResponse updateEvaluation(
+            @PathVariable long hackathonId,
+            @PathVariable long submissionId,
+            @RequestBody EvaluateRequest request,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        long staffId = SessionAuth.requireStaffId(sessionStore, token);
+        if (request == null) {
+            throw new IllegalArgumentException("Dati valutazione non validi");
+        }
+        evaluationController.assertHackathonInReviewForJudge(staffId, hackathonId);
+        ensureSubmissionBelongsToHackathon(staffId, hackathonId, submissionId);
+        return EvaluationResponse.from(evaluationController.updateEvaluation(
+                staffId, submissionId, request.score(), request.comment()));
+    }
+
     // Recupera la valutazione corrente di una submission.
     @GetMapping("/hackathons/{hackathonId}/submissions/{submissionId}/evaluation")
     public ResponseEntity<EvaluationResponse> getEvaluation(
@@ -147,6 +160,12 @@ public class StaffWebController {
                 .map(EvaluationResponse::from)
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/judge/evaluatable-hackathons")
+    public List<SubmissionAccessController.AssignedHackathonView> listEvaluatableHackathons(
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return submissionAccessController.listEvaluatableHackathons(SessionAuth.requireStaffId(sessionStore, token));
     }
 
     // Crea un hackathon nuovo come organizer.
@@ -228,15 +247,36 @@ public class StaffWebController {
     @PostMapping("/organizer/hackathons/{hackathonId}/advance")
     public Map<String, String> advanceHackathon(
             @PathVariable long hackathonId,
+            @RequestParam(required = false) HackathonStatus expectedNext,
             @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
         long staffId = SessionAuth.requireStaffId(sessionStore, token);
-        hackathonController.advanceStatus(staffId, hackathonId);
-        return Map.of("status", "ok");
+        Hackathon event = hackathonController.advanceStatus(staffId, hackathonId, expectedNext);
+        return Map.of("status", "ok", "phase", event.getStatus().name());
+    }
+
+    @GetMapping("/organizer/hackathons/{hackathonId}/phase-transition")
+    public HackathonController.PhaseTransition viewPhaseTransition(
+            @PathVariable long hackathonId,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return hackathonController.viewPhaseTransition(SessionAuth.requireStaffId(sessionStore, token), hackathonId);
+    }
+
+    @GetMapping("/organizer/hackathons")
+    public List<MentorManagementController.OrganizerHackathonView> listOrganizerHackathons(
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return mentorManagementController.listOrganizerHackathons(SessionAuth.requireStaffId(sessionStore, token));
+    }
+
+    @GetMapping("/organizer/hackathons/{hackathonId}/staff")
+    public MentorManagementController.MentorAssignmentView getStaffAssignments(
+            @PathVariable long hackathonId,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return mentorManagementController.viewMentorAssignments(SessionAuth.requireStaffId(sessionStore, token), hackathonId);
     }
 
     // Aggiunge mentor all'hackathon.
     @PostMapping("/organizer/hackathons/{hackathonId}/mentors")
-    public Map<String, String> addMentors(
+    public Map<String, Object> addMentors(
             @PathVariable long hackathonId,
             @RequestBody AddMentorsRequest request,
             @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
@@ -250,7 +290,14 @@ public class StaffWebController {
         }
 
         mentorManagementController.addMentors(staffId, hackathonId, mentorIds);
-        return Map.of("status", "ok");
+        return Map.of("status", "ok", "staff", mentorManagementController.viewMentorAssignments(staffId, hackathonId));
+    }
+
+    @GetMapping("/organizer/hackathons/{hackathonId}/proclamation")
+    public HackathonController.ProclamationView viewProclamation(
+            @PathVariable long hackathonId,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return hackathonController.viewProclamation(SessionAuth.requireStaffId(sessionStore, token), hackathonId);
     }
 
     // Imposta il winner dell'hackathon.
@@ -264,30 +311,28 @@ public class StaffWebController {
             throw new IllegalArgumentException("Team non valido");
         }
 
-        hackathonController.setWinner(staffId, hackathonId, request.teamId());
-        return Map.of("status", "ok");
+        Hackathon event = hackathonController.setWinner(staffId, hackathonId, request.teamId());
+        return Map.of("status", "ok", "winnerTeamId", String.valueOf(event.getWinnerTeamId()),
+                "prizePaid", String.valueOf(event.isPrizePaid()));
     }
 
     // Tenta il pagamento del premio al winner.
     @PostMapping("/organizer/hackathons/{hackathonId}/pay-prize")
-    public Map<String, String> payPrize(
+    public Map<String, Object> payPrize(
             @PathVariable long hackathonId,
             @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
         long staffId = SessionAuth.requireStaffId(sessionStore, token);
-        String result = hackathonController.payPrize(staffId, hackathonId);
-
-        Map<String, String> response = new LinkedHashMap<>();
-        response.put("result", result);
-
-        // Espone receipt/error solo se presenti.
-        String receiptId = hackathonController.getHackathonDetails(hackathonId).orElseThrow().getPrizeReceiptId();
-        if (receiptId != null && !receiptId.isBlank()) {
-            response.put("receiptId", receiptId);
+        HackathonController.PrizeResult prize = hackathonController.payPrizeResult(staffId, hackathonId);
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("result", prize.result());
+        response.put("winnerTeamId", prize.winnerTeamId());
+        response.put("phase", prize.phase().name());
+        response.put("prizePaid", prize.prizePaid());
+        if (prize.receiptId() != null && !prize.receiptId().isBlank()) {
+            response.put("receiptId", prize.receiptId());
         }
-
-        String lastErrorMessage = paymentSystem.getLastErrorMessage();
-        if (result.contains("fallito") && lastErrorMessage != null && !lastErrorMessage.isBlank()) {
-            response.put("lastErrorMessage", lastErrorMessage);
+        if (prize.lastErrorMessage() != null && !prize.lastErrorMessage().isBlank()) {
+            response.put("lastErrorMessage", prize.lastErrorMessage());
         }
         return response;
     }
@@ -310,6 +355,14 @@ public class StaffWebController {
     }
 
     // Crea una proposta call per una richiesta supporto.
+    @GetMapping("/mentor/hackathons/{hackathonId}/support-requests/{requestId}")
+    public SupportController.SupportRequestView getSupportRequest(
+            @PathVariable long hackathonId, @PathVariable long requestId,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return supportController.viewSupportRequestForMentor(SessionAuth.requireStaffId(sessionStore, token),
+                hackathonId, requestId);
+    }
+
     @PostMapping("/mentor/support-requests/{requestId}/call-proposals")
     public ResponseEntity<CallProposalDto> createCallProposal(
             @PathVariable long requestId,
@@ -369,6 +422,44 @@ public class StaffWebController {
                 .toList();
     }
 
+    @GetMapping("/organizer/hackathons/{hackathonId}/violation-reports")
+    public List<ViolationReportDto> listReports(
+            @PathVariable long hackathonId,
+            @RequestParam(defaultValue = "false") boolean onlyPending,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return violationReportController.listReports(SessionAuth.requireStaffId(sessionStore, token),
+                hackathonId, onlyPending).stream().map(ViolationReportDto::from).toList();
+    }
+
+    @GetMapping("/mentor/reportable-hackathons")
+    public List<ViolationReportController.MentorHackathonOption> listReportableHackathons(
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return violationReportController.listMentorHackathons(SessionAuth.requireStaffId(sessionStore, token));
+    }
+
+    @GetMapping("/mentor/hackathons/{hackathonId}/reportable-teams")
+    public List<ViolationReportController.ReportTeamOption> listReportableTeams(
+            @PathVariable long hackathonId,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return violationReportController.listReportableTeams(SessionAuth.requireStaffId(sessionStore, token), hackathonId);
+    }
+
+    @GetMapping("/mentor/hackathons/{hackathonId}/violation-reports")
+    public List<ViolationReportDto> listOwnReports(
+            @PathVariable long hackathonId,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return violationReportController.listOwnReports(SessionAuth.requireStaffId(sessionStore, token),
+                hackathonId).stream().map(ViolationReportDto::from).toList();
+    }
+
+    @GetMapping("/mentor/hackathons/{hackathonId}/violation-reports/{reportId}")
+    public ViolationReportDto getOwnReport(
+            @PathVariable long hackathonId, @PathVariable long reportId,
+            @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
+        return ViolationReportDto.from(violationReportController.viewOwnReport(
+                SessionAuth.requireStaffId(sessionStore, token), hackathonId, reportId));
+    }
+
     // Applica la decisione organizer sul report.
     @PostMapping("/organizer/violation-reports/{reportId}/decision")
     public Map<String, String> manageReport(
@@ -377,8 +468,8 @@ public class StaffWebController {
             @RequestHeader(value = SESSION_TOKEN_HEADER, required = false) String token) {
         long staffId = SessionAuth.requireStaffId(sessionStore, token);
         String decision = normalizeDecision(request == null ? null : request.decision());
-        violationReportController.manageReport(staffId, reportId, decision);
-        return Map.of("status", "ok");
+        ViolationReport report = violationReportController.manageReport(staffId, reportId, decision);
+        return Map.of("status", "ok", "decision", report.getDecision());
     }
 
     @GetMapping("/judge/hackathons/{hackathonId}/warnings")
@@ -410,7 +501,7 @@ public class StaffWebController {
         if (request == null) {
             throw new IllegalArgumentException("Dati valutazione non validi");
         }
-        if (request.score() < 0 || request.score() > 30) {
+        if (request.score() == null || request.score() < 0 || request.score() > 30) {
             throw new IllegalArgumentException("Score non valido");
         }
         String comment = request.comment();
@@ -443,7 +534,7 @@ public class StaffWebController {
     private record AddMentorsRequest(List<Long> mentorIds) {
     }
 
-    private record EvaluateRequest(int score, String comment) {
+    private record EvaluateRequest(Integer score, String comment) {
     }
 
     private record EvaluationResponse(
@@ -452,6 +543,7 @@ public class StaffWebController {
             int score,
             int baseScore,
             int penalty,
+            String comment,
             LocalDateTime evaluatedAt
     ) {
         private static EvaluationResponse from(Evaluation evaluation) {
@@ -461,6 +553,7 @@ public class StaffWebController {
                     evaluation.getScore(),
                     evaluation.getBaseScore(),
                     evaluation.getPenalty(),
+                    evaluation.getComment(),
                     evaluation.getEvaluatedAt()
             );
         }
@@ -472,6 +565,7 @@ public class StaffWebController {
                     evaluationView.score(),
                     evaluationView.baseScore(),
                     evaluationView.penalty(),
+                    evaluationView.comment(),
                     evaluationView.evaluatedAt()
             );
         }

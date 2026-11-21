@@ -145,6 +145,9 @@ public class AppContext {
                 staffOnly,
                 Set.of(StaffRole.JUDGE)
         );
+
+        registry.register(new EvaluateSubmissionCommand(submissionAccessController, evaluationController,
+                sessionContext, inputHelper, true), staffOnly, Set.of(StaffRole.JUDGE));
         registry.register(new EvaluateWarningCommand(evaluationController, violationReportController,
                 sessionContext, inputHelper), staffOnly, Set.of(StaffRole.JUDGE));
         registry.register(new ViewEvaluationCommand(

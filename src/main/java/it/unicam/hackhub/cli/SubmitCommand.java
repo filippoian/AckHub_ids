@@ -54,7 +54,7 @@ public class SubmitCommand implements Command {
             }
 
             String content = inputHelper.readNonBlank("Submission content");
-            Submission saved = submissionController.submitOrUpdate(currentUserId.get(), teamId, content);
+            Submission saved = submissionController.createSubmission(currentUserId.get(), teamId, content);
             System.out.println("Submission salvata. submissionId=" + saved.getSubmissionId());
             System.out.println("submittedAt=" + saved.getSubmittedAt());
             System.out.println("lastUpdatedAt=" + saved.getLastUpdatedAt());

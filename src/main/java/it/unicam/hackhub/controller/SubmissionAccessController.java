@@ -3,12 +3,17 @@ package it.unicam.hackhub.controller;
 import it.unicam.hackhub.model.Hackathon;
 import it.unicam.hackhub.model.StaffAssignment;
 import it.unicam.hackhub.model.Submission;
+import it.unicam.hackhub.model.Team;
 import it.unicam.hackhub.model.TeamRegistration;
+import it.unicam.hackhub.model.ViolationReport;
 import it.unicam.hackhub.model.enums.StaffRole;
+import it.unicam.hackhub.repository.EvaluationRepository;
 import it.unicam.hackhub.repository.HackathonRepository;
 import it.unicam.hackhub.repository.StaffAssignmentRepository;
 import it.unicam.hackhub.repository.SubmissionRepository;
 import it.unicam.hackhub.repository.TeamRegistrationRepository;
+import it.unicam.hackhub.repository.TeamRepository;
+import it.unicam.hackhub.repository.ViolationReportRepository;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -27,15 +32,24 @@ public class SubmissionAccessController {
     private final StaffAssignmentRepository staffAssignmentRepository;
     private final TeamRegistrationRepository teamRegistrationRepository;
     private final SubmissionRepository submissionRepository;
+    private final TeamRepository teamRepository;
+    private final EvaluationRepository evaluationRepository;
+    private final ViolationReportRepository violationReportRepository;
 
     public SubmissionAccessController(HackathonRepository hackathonRepository,
                                       StaffAssignmentRepository staffAssignmentRepository,
                                       TeamRegistrationRepository teamRegistrationRepository,
-                                      SubmissionRepository submissionRepository) {
+                                      SubmissionRepository submissionRepository,
+                                      TeamRepository teamRepository,
+                                      EvaluationRepository evaluationRepository,
+                                      ViolationReportRepository violationReportRepository) {
         this.hackathonRepository = hackathonRepository;
         this.staffAssignmentRepository = staffAssignmentRepository;
         this.teamRegistrationRepository = teamRegistrationRepository;
         this.submissionRepository = submissionRepository;
+        this.teamRepository = teamRepository;
+        this.evaluationRepository = evaluationRepository;
+        this.violationReportRepository = violationReportRepository;
     }
 
     // Elenca gli hackathon assegnati allo staff con i ruoli trovati.
@@ -65,16 +79,27 @@ public class SubmissionAccessController {
                 .toList();
     }
 
+    public List<AssignedHackathonView> listEvaluatableHackathons(long currentStaffId) {
+        return listAssignedHackathons(currentStaffId).stream()
+                .filter(event -> event.roles().contains(StaffRole.JUDGE))
+                .filter(event -> hackathonRepository.findById(event.hackathonId())
+                        .filter(hackathon -> hackathon.canEvaluate() && hackathon.getWinnerTeamId() == null)
+                        .isPresent())
+                .toList();
+    }
+
+    private void requireAssignment(long currentStaffId, long hackathonId) {
+        hackathonRepository.findById(hackathonId)
+                .orElseThrow(() -> new IllegalArgumentException("Hackathon non trovato"));
+        if (staffAssignmentRepository.findByHackathonId(hackathonId).stream()
+                .noneMatch(assignment -> assignment.getStaffId() == currentStaffId)) {
+            throw new IllegalArgumentException("Staff non assegnato a questo hackathon");
+        }
+    }
+
     // Restituisce le submission di un hackathon solo allo staff assegnato.
     public List<Submission> listSubmissionsForHackathon(long currentStaffId, long hackathonId) {
-        hackathonRepository.findById(hackathonId).orElseThrow(() -> new IllegalArgumentException("Hackathon non trovato"));
-        List<StaffAssignment> assignments = staffAssignmentRepository.findByHackathonId(hackathonId);
-        // Lo staff vede solo le submission degli hackathon a cui e' assegnato.
-        boolean assigned = assignments.stream()
-                .anyMatch(assignment -> assignment.getStaffId() == currentStaffId);
-        if (!assigned) {
-            throw new IllegalArgumentException("Not authorized: staff not assigned to this hackathon");
-        }
+        requireAssignment(currentStaffId, hackathonId);
 
         List<TeamRegistration> registrations = teamRegistrationRepository.findByHackathonId(hackathonId);
         List<Submission> submissions = new ArrayList<>();
@@ -87,34 +112,48 @@ public class SubmissionAccessController {
 
     // Restituisce le submission in formato leggero per le liste.
     public List<SubmissionView> listSubmissionViewsForHackathon(long currentStaffId, long hackathonId) {
-        return listSubmissionsForHackathon(currentStaffId, hackathonId).stream()
-                .sorted(Comparator.comparingLong(Submission::getSubmissionId))
-                .map(submission -> new SubmissionView(
-                        submission.getSubmissionId(),
-                        submission.getRegistrationId(),
-                        submission.getLastUpdatedAt(),
-                        submission.getContent()
-                ))
+        requireAssignment(currentStaffId, hackathonId);
+        Map<Long, List<ViolationReport>> warningsByTeam = warningsByTeam(hackathonId);
+        return teamRegistrationRepository.findByHackathonId(hackathonId).stream()
+                .flatMap(registration -> submissionRepository.findByRegistrationId(registration.getRegistrationId())
+                        .map(submission -> view(submission, registration, warningsByTeam)).stream())
+                .sorted(Comparator.comparingLong(SubmissionView::submissionId))
                 .toList();
     }
 
-    // Restituisce il dettaglio di una submission verificando prima l'accesso allo stesso hackathon.
     public Optional<SubmissionDetailView> getSubmissionDetailForHackathon(long currentStaffId,
                                                                            long hackathonId,
                                                                            long submissionId) {
-        if (submissionId <= 0) {
-            return Optional.empty();
-        }
+        requireAssignment(currentStaffId, hackathonId);
+        return submissionRepository.findById(submissionId).flatMap(submission ->
+                teamRegistrationRepository.findById(submission.getRegistrationId())
+                        .filter(registration -> registration.getHackathonId() == hackathonId)
+                        .map(registration -> {
+                            Map<Long, List<ViolationReport>> warnings = warningsByTeam(hackathonId);
+                            SubmissionView summary = view(submission, registration, warnings);
+                            return new SubmissionDetailView(summary.submissionId(), summary.registrationId(),
+                                    summary.updatedAt(), summary.content(), summary.teamId(), summary.teamName(),
+                                    summary.disciplinaryStatus(), summary.evaluated(),
+                                    warnings.getOrDefault(summary.teamId(), List.of()).stream()
+                                            .map(WarningView::from).toList());
+                        }));
+    }
 
-        return listSubmissionsForHackathon(currentStaffId, hackathonId).stream()
-                .filter(submission -> submission.getSubmissionId() == submissionId)
-                .findFirst()
-                .map(submission -> new SubmissionDetailView(
-                        submission.getSubmissionId(),
-                        submission.getRegistrationId(),
-                        submission.getLastUpdatedAt(),
-                        submission.getContent()
-                ));
+    private Map<Long, List<ViolationReport>> warningsByTeam(long hackathonId) {
+        return violationReportRepository.findByHackathonId(hackathonId).stream()
+                .filter(report -> "TEAM_WARNED".equals(report.getDecision()))
+                .collect(Collectors.groupingBy(ViolationReport::getTeamId));
+    }
+
+    private SubmissionView view(Submission submission, TeamRegistration registration,
+                                Map<Long, List<ViolationReport>> warningsByTeam) {
+        long teamId = registration.getTeamId();
+        String name = teamRepository.findById(teamId).map(Team::getTeamName).orElse(null);
+        String status = registration.isExpelled() ? "TEAM_EXPELLED"
+                : warningsByTeam.containsKey(teamId) ? "TEAM_WARNED" : "NONE";
+        return new SubmissionView(submission.getSubmissionId(), submission.getRegistrationId(),
+                submission.getLastUpdatedAt(), submission.getContent(), teamId, name, status,
+                evaluationRepository.findBySubmissionId(submission.getSubmissionId()).isPresent());
     }
 
     private String safe(String value) {
@@ -141,12 +180,28 @@ public class SubmissionAccessController {
     public record SubmissionView(long submissionId,
                                  long registrationId,
                                  LocalDateTime updatedAt,
-                                 String content) {
+                                 String content,
+                                 long teamId,
+                                 String teamName,
+                                 String disciplinaryStatus,
+                                 boolean evaluated) {
     }
 
     public record SubmissionDetailView(long submissionId,
                                        long registrationId,
                                        LocalDateTime updatedAt,
-                                       String content) {
+                                       String content,
+                                       long teamId,
+                                       String teamName,
+                                       String disciplinaryStatus,
+                                       boolean evaluated,
+                                       List<WarningView> warnings) {
+    }
+
+    public record WarningView(long reportId, String reason, Integer penalty, boolean evaluated) {
+        private static WarningView from(ViolationReport report) {
+            return new WarningView(report.getReportId(), report.getDescription(),
+                    report.isPenaltyEvaluated() ? report.getPenalty() : null, report.isPenaltyEvaluated());
+        }
     }
 }

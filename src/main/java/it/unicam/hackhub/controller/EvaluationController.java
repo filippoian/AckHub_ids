@@ -71,63 +71,83 @@ public class EvaluationController {
 
     // Controlla che la submission possa essere valutata dal judge corrente.
     public void assertEvaluatable(long currentStaffId, long submissionId) {
-        Submission submission = submissionRepository.findById(submissionId)
-                .orElseThrow(() -> new IllegalArgumentException("Submission non trovata"));
-
-        TeamRegistration registration = teamRegistrationRepository.findById(submission.getRegistrationId())
-                .orElseThrow(() -> new IllegalStateException("Team registration not found"));
-        long hackathonId = registration.getHackathonId();
-
-        // Solo i judge assegnati possono valutare.
-        boolean isJudge = staffAssignmentRepository.findByHackathonIdAndRole(hackathonId, StaffRole.JUDGE)
-                .stream()
-                .anyMatch(assignment -> assignment.getStaffId() == currentStaffId);
-        if (!isJudge) {
-            throw new IllegalArgumentException("Not authorized: only judge can evaluate");
-        }
-
-        Hackathon hackathon = hackathonRepository.findById(hackathonId)
-                .orElseThrow(() -> new IllegalArgumentException("Hackathon not found"));
-        // La valutazione e' ammessa solo nella fase REVIEW.
-        if (!hackathon.canEvaluate() || hackathon.getWinnerTeamId() != null) {
-            throw new IllegalStateException("Hackathon not in REVIEW");
-        }
-        // Da qui in poi il team non puo' piu' essere valutato se espulso.
-        if (registration.isExpelled()) {
-            throw new IllegalStateException("Cannot evaluate expelled team submission");
-        }
+        TeamRegistration registration = findRegistration(findSubmission(submissionId));
+        assertHackathonInReviewForJudge(currentStaffId, registration.getHackathonId());
+        requireActiveTeam(registration);
     }
 
-    // Verifica rapida usata quando il client ha gia' hackathon e judge.
     public void assertHackathonInReviewForJudge(long currentStaffId, long hackathonId) {
-        boolean isJudge = staffAssignmentRepository.findByHackathonIdAndRole(hackathonId, StaffRole.JUDGE)
-                .stream()
-                .anyMatch(assignment -> assignment.getStaffId() == currentStaffId);
-        if (!isJudge) {
-            throw new IllegalArgumentException("Non sei giudice assegnato a questo hackathon.");
-        }
+        requireJudgeReview(currentStaffId, hackathonRepository.findById(hackathonId)
+                .orElseThrow(() -> new IllegalArgumentException("Hackathon non trovato")));
+    }
 
-        Hackathon hackathon = hackathonRepository.findById(hackathonId)
-                .orElseThrow(() -> new IllegalArgumentException("Hackathon not found"));
-        if (!hackathon.canEvaluate() || hackathon.getWinnerTeamId() != null) {
-            throw new IllegalStateException("Hackathon not in REVIEW");
+    private void requireJudgeReviewForUpdate(long currentStaffId, long hackathonId) {
+        requireJudgeReview(currentStaffId, hackathonRepository.findByIdForUpdate(hackathonId)
+                .orElseThrow(() -> new IllegalArgumentException("Hackathon non trovato")));
+    }
+
+    private void requireJudgeReview(long currentStaffId, Hackathon event) {
+        boolean isJudge = staffAssignmentRepository.findByHackathonIdAndRole(event.getHackathonId(), StaffRole.JUDGE)
+                .stream().anyMatch(assignment -> assignment.getStaffId() == currentStaffId);
+        if (!isJudge) {
+            throw new IllegalArgumentException("Non sei giudice assegnato a questo hackathon");
+        }
+        if (!event.canEvaluate() || event.getWinnerTeamId() != null) {
+            throw new IllegalStateException("La valutazione è disponibile in fase REVIEW prima della proclamazione");
         }
     }
 
-    // Salva il voto: aggiorna quello esistente oppure ne crea uno nuovo.
+    private Submission findSubmission(long submissionId) {
+        return submissionRepository.findById(submissionId)
+                .orElseThrow(() -> new IllegalArgumentException("Sottomissione non trovata"));
+    }
+
+    private TeamRegistration findRegistration(Submission submission) {
+        return teamRegistrationRepository.findById(submission.getRegistrationId())
+                .orElseThrow(() -> new IllegalStateException("Registrazione non trovata"));
+    }
+
+    private void requireActiveTeam(TeamRegistration registration) {
+        if (registration.isExpelled()) {
+            throw new IllegalStateException("Impossibile valutare un team espulso");
+        }
+    }
+
     @Transactional
     public Evaluation evaluateSubmission(long currentStaffId, long submissionId, int score, String comment) {
-        if (score < 0 || score > 30) {
-            throw new IllegalArgumentException("Score must be between 0 and 30");
+        return saveEvaluation(currentStaffId, submissionId, score, comment, false);
+    }
+
+    @Transactional
+    public Evaluation updateEvaluation(long currentStaffId, long submissionId, Integer score, String comment) {
+        return saveEvaluation(currentStaffId, submissionId, score, comment, true);
+    }
+
+    private Evaluation saveEvaluation(long currentStaffId, long submissionId, Integer score, String comment, boolean update) {
+        if ((!update && score == null) || (score != null && (score < 0 || score > 30))) {
+            throw new IllegalArgumentException("Voto base obbligatorio e compreso fra 0 e 30");
+        }
+        if ((!update && comment == null) || (comment != null && comment.isBlank())) {
+            throw new IllegalArgumentException("Giudizio obbligatorio");
+        }
+        if (update && score == null && comment == null) {
+            throw new IllegalArgumentException("Specificare il voto base o il giudizio da modificare");
+        }
+        Submission submission = findSubmission(submissionId);
+        long hackathonId = findRegistration(submission).getHackathonId();
+        requireJudgeReviewForUpdate(currentStaffId, hackathonId);
+        TeamRegistration registration = teamRegistrationRepository.findByIdForUpdate(submission.getRegistrationId())
+                .orElseThrow(() -> new IllegalStateException("Registrazione non trovata"));
+        requireActiveTeam(registration);
+
+        Optional<Evaluation> existing = evaluationRepository.findBySubmissionId(submissionId);
+        if (update && existing.isEmpty()) {
+            throw new IllegalStateException("Nessuna valutazione da modificare");
+        }
+        if (!update && existing.isPresent()) {
+            throw new IllegalStateException("Sottomissione già valutata. Apri Modifica valutazione.");
         }
 
-        if (comment == null || comment.isBlank()) throw new IllegalArgumentException("Commento obbligatorio");
-        assertEvaluatable(currentStaffId, submissionId);
-
-        Submission submission = submissionRepository.findById(submissionId)
-                .orElseThrow(() -> new IllegalArgumentException("Submission non trovata"));
-
-        TeamRegistration registration = teamRegistrationRepository.findById(submission.getRegistrationId()).orElseThrow();
         List<ViolationReport> warnings = teamWarnings(registration.getHackathonId(), registration.getTeamId());
         List<Long> pendingReportIds = warnings.stream()
                 .filter(w -> !w.isPenaltyEvaluated())
@@ -140,22 +160,16 @@ public class EvaluationController {
         }
         int total = totalPenalty(warnings);
         LocalDateTime now = LocalDateTime.now();
-        // Aggiorno la valutazione esistente, altrimenti ne creo una nuova.
-        Evaluation evaluation = evaluationRepository.findBySubmissionId(submissionId)
-                .map(existing -> {
-                    existing.setScore(score);
-                    existing.setComment(comment);
-                    existing.setEvaluatedAt(now);
-                    return existing;
-                })
-                .orElseGet(() -> new Evaluation(
-                        0L,
-                        submissionId,
-                        score,
-                        comment,
-                        now
-                ));
-
+        Evaluation evaluation = existing.orElseGet(() -> new Evaluation(0L, submissionId, score, comment.trim(), now));
+        if (update) {
+            if (score != null) {
+                evaluation.setScore(score);
+            }
+            if (comment != null) {
+                evaluation.setComment(comment.trim());
+            }
+            evaluation.setEvaluatedAt(now);
+        }
         evaluation.setPenalty(total);
         return evaluationRepository.save(evaluation);
     }
@@ -165,11 +179,13 @@ public class EvaluationController {
         if (penalty < 0 || penalty > 30) throw new IllegalArgumentException("Penalità fuori intervallo 0–30");
         ViolationReport report = violationReportRepository.findById(reportId)
                 .orElseThrow(() -> new IllegalArgumentException("Segnalazione non trovata"));
-        assertHackathonInReviewForJudge(currentStaffId, report.getHackathonId());
+        requireJudgeReviewForUpdate(currentStaffId, report.getHackathonId());
         if (!"TEAM_WARNED".equals(report.getDecision())) throw new IllegalStateException("Segnalazione non ammonita");
         TeamRegistration registration = teamRegistrationRepository
-                .findByTeamIdAndHackathonId(report.getTeamId(), report.getHackathonId()).orElseThrow();
-        if (registration.isExpelled()) throw new IllegalStateException("Team espulso");
+                .findByTeamIdAndHackathonId(report.getTeamId(), report.getHackathonId())
+                .flatMap(value -> teamRegistrationRepository.findByIdForUpdate(value.getRegistrationId()))
+                .orElseThrow(() -> new IllegalStateException("Registrazione non trovata"));
+        requireActiveTeam(registration);
         // Sostituisce la penalità precedente: non la somma una seconda volta.
         int total = Math.addExact(penalty, totalPenalty(teamWarnings(report.getHackathonId(), report.getTeamId())
                 .stream().filter(w -> w.getReportId() != reportId).toList()));

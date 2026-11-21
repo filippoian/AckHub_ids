@@ -38,7 +38,6 @@ public class AuthWebController {
     // Registra un nuovo utente partendo dai dati HTTP.
     @PostMapping("/register")
     @org.springframework.web.bind.annotation.ResponseStatus(HttpStatus.CREATED)
-    @org.springframework.transaction.annotation.Transactional
     public RegistrationResult register(@RequestBody RegisterRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("Username e password obbligatori");
@@ -50,12 +49,7 @@ public class AuthWebController {
             throw new IllegalArgumentException("Username e password obbligatori");
         }
 
-        if (request.email() != null && !request.email().isBlank()
-                && !request.email().trim().matches("[^\\s@]+@[^\\s@]+\\.[^\\s@]+")) throw new IllegalArgumentException("Email non valida");
-        RegistrationResult result = authController.registerUser(username, password);
-        if (request.email() == null || request.email().isBlank()) return result;
-        return new RegistrationResult(authController.updateProfile(result.profile().userId(), username,
-                request.email(), password, null), result.recoveryCode());
+        return authController.registerUser(username, password, request.email());
     }
 
     @PostMapping(value = "/recover", consumes = "application/x-www-form-urlencoded")

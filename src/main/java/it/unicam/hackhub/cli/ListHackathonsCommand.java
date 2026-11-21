@@ -29,11 +29,13 @@ public class ListHackathonsCommand implements Command {
                         String.valueOf(hackathon.getHackathonId()),
                         nullToDash(hackathon.getHackathonName()),
                         String.valueOf(hackathon.getStatus()),
-                        nullToDash(hackathon.getLocation())
+                        nullToDash(hackathon.getLocation()),
+                        String.valueOf(hackathon.getStartDate()),
+                        String.valueOf(hackathon.getEndDate())
                 ));
             }
 
-            TablePrinter.print(List.of("ID", "NAME", "STATUS", "LOCATION"), rows);
+            TablePrinter.print(List.of("ID", "NAME", "STATUS", "LOCATION", "INIZIO", "FINE"), rows);
         } catch (OperationCancelledException ex) {
             System.out.println("Operazione annullata.");
         }

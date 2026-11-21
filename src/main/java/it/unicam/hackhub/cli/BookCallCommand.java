@@ -56,21 +56,24 @@ public class BookCallCommand implements Command {
                         String.valueOf(proposal.requestId()),
                         String.valueOf(proposal.proposedStart()),
                         String.valueOf(proposal.proposedEnd()),
+                        proposal.mentorName() == null ? "-" : proposal.mentorName(),
                         String.valueOf(proposal.booked())
                 ));
             }
 
-            TablePrinter.print(List.of("PROPOSAL_ID", "REQUEST_ID", "START", "END", "BOOKED"), rows);
+            TablePrinter.print(List.of("PROPOSAL_ID", "REQUEST_ID", "START", "END", "MENTORE", "BOOKED"), rows);
             if (selectableProposalIds.isEmpty()) {
                 return;
             }
 
             long proposalId = readProposalId(selectableProposalIds);
-            CallBooking booking = supportController.bookCall(currentUserId.get(), proposalId);
             SupportController.CallProposalSummary selectedProposal = proposalById.get(proposalId);
-            if (selectedProposal == null) {
-                throw new IllegalStateException("Proposal non disponibile.");
+            System.out.println("Slot: " + selectedProposal.proposedStart() + " – " + selectedProposal.proposedEnd()
+                    + " | Mentore: " + selectedProposal.mentorName());
+            if (!"s".equalsIgnoreCase(inputHelper.readNonBlank("Confermi la prenotazione? (s/n)").trim())) {
+                return;
             }
+            CallBooking booking = supportController.bookCall(currentUserId.get(), proposalId);
 
             List<List<String>> bookingRows = List.of(List.of(
                     String.valueOf(booking.getCallId()),

@@ -1,5 +1,8 @@
 package it.unicam.hackhub;
 
+import it.unicam.hackhub.cli.InputHelper;
+import it.unicam.hackhub.cli.ProclaimWinnerCommand;
+import it.unicam.hackhub.cli.SessionContext;
 import it.unicam.hackhub.controller.HackathonController;
 import it.unicam.hackhub.external.PaymentSystem;
 import it.unicam.hackhub.external.PaymentSystemStub;
@@ -14,6 +17,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.Scanner;
 import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -65,6 +69,35 @@ class PrizeWorkflowTest {
         assertTrue(paid.isPrizePaid()); assertEquals(HackathonStatus.CLOSED, paid.getStatus());
         assertEquals("receipt-123", paid.getPrizeReceiptId());
         assertTrue(controller.payPrize(901, eventId).contains("gia erogato"));
+        verify(payment, times(2)).payPrize(eq(eventId), any(BigDecimal.class), eq(teamName));
+    }
+
+    @Test void cliConfirmsCandidateAndCanRetryWithoutSelectingAnotherWinner() {
+        SessionContext session = new SessionContext();
+        session.loginStaff(901);
+        when(payment.payPrize(eq(eventId), any(BigDecimal.class), eq(teamName))).thenReturn(false, true);
+        when(payment.getLastReceiptId()).thenReturn("receipt-retry");
+
+        try (var input = new Scanner(eventId + "\n" + teamId + "\nn\n")) {
+            new ProclaimWinnerCommand(controller, session, new InputHelper(input)).execute();
+        }
+        assertNull(events.findById(eventId).orElseThrow().getWinnerTeamId());
+        verifyNoInteractions(payment);
+
+        try (var input = new Scanner(eventId + "\n" + teamId + "\ns\n")) {
+            new ProclaimWinnerCommand(controller, session, new InputHelper(input)).execute();
+        }
+        var afterFirstAttempt = events.findById(eventId).orElseThrow();
+        assertEquals(teamId, afterFirstAttempt.getWinnerTeamId());
+        assertFalse(afterFirstAttempt.isPrizePaid());
+
+        try (var input = new Scanner(eventId + "\ns\n")) {
+            new ProclaimWinnerCommand(controller, session, new InputHelper(input)).execute();
+        }
+        var closed = events.findById(eventId).orElseThrow();
+        assertEquals(teamId, closed.getWinnerTeamId());
+        assertEquals(HackathonStatus.CLOSED, closed.getStatus());
+        assertEquals("receipt-retry", closed.getPrizeReceiptId());
         verify(payment, times(2)).payPrize(eq(eventId), any(BigDecimal.class), eq(teamName));
     }
 

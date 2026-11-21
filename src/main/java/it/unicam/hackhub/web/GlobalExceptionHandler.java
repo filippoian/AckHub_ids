@@ -1,5 +1,8 @@
 package it.unicam.hackhub.web;
 
+import it.unicam.hackhub.controller.HackathonController.PrizeServiceUnavailableException;
+import it.unicam.hackhub.controller.SupportController.SupportAlreadyBookedException;
+import it.unicam.hackhub.controller.TeamRegistrationController.AlreadyRegisteredException;
 import it.unicam.hackhub.web.session.ForbiddenException;
 import it.unicam.hackhub.web.session.UnauthenticatedException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -28,11 +31,31 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of("error", message));
     }
 
+    @ExceptionHandler(AlreadyRegisteredException.class)
+    public ResponseEntity<Map<String, Object>> handleExistingRegistration(AlreadyRegisteredException ex) {
+        var existing = ex.registration();
+        return ResponseEntity.badRequest().body(Map.of("error", ex.getMessage(),
+                "registrationId", existing.getRegistrationId(), "hackathonId", existing.getHackathonId(),
+                "teamId", existing.getTeamId()));
+    }
+
     // Input non valido passato dal client.
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> handleIllegalArgumentException(IllegalArgumentException ex) {
         String message = ex.getMessage() == null ? "Richiesta non valida" : ex.getMessage();
         return ResponseEntity.badRequest().body(Map.of("error", message));
+    }
+
+    @ExceptionHandler(PrizeServiceUnavailableException.class)
+    public ResponseEntity<Map<String, Object>> handleUnavailablePayment(PrizeServiceUnavailableException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(Map.of("error", ex.getMessage(), "winnerTeamId", ex.winnerTeamId(), "prizePaid", false));
+    }
+
+    @ExceptionHandler(SupportAlreadyBookedException.class)
+    public ResponseEntity<Map<String, Object>> handleBookedSupport(SupportAlreadyBookedException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(Map.of("error", ex.getMessage(), "bookings", ex.bookings()));
     }
 
     // Regola di dominio violata nello stato attuale.

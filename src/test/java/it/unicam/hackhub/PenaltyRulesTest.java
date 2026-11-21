@@ -32,11 +32,13 @@ class PenaltyRulesTest {
         when(assignment.getRole()).thenReturn(StaffRole.JUDGE);
         when(staff.findByHackathonIdAndRole(1, StaffRole.JUDGE)).thenReturn(List.of(assignment));
         when(events.findById(1)).thenReturn(Optional.of(event));
+        when(events.findByIdForUpdate(1)).thenReturn(Optional.of(event));
         when(submission.getSubmissionId()).thenReturn(4L);
         when(submission.getRegistrationId()).thenReturn(2L);
         when(submissions.findById(4)).thenReturn(Optional.of(submission));
         when(submissions.findByRegistrationId(2)).thenReturn(Optional.of(submission));
         when(registrations.findById(2)).thenReturn(Optional.of(registration));
+        when(registrations.findByIdForUpdate(2)).thenReturn(Optional.of(registration));
         when(registrations.findByTeamIdAndHackathonId(3, 1)).thenReturn(Optional.of(registration));
         controller = new EvaluationController(staff, events, evaluations, submissions, registrations, reports);
     }
@@ -59,7 +61,9 @@ class PenaltyRulesTest {
         assertEquals(17, evaluation.getScore()); assertEquals(13, evaluation.getPenalty());
         controller.evaluateWarning(7, first.getReportId(), 2);
         assertEquals(20, evaluation.getScore()); assertEquals(10, evaluation.getPenalty());
-        controller.evaluateSubmission(7, 4, 25, "modifica");
+        assertThrows(IllegalStateException.class, () -> controller.evaluateSubmission(7, 4, 25, "duplicato"));
+        var updated = controller.updateEvaluation(7, 4, 25, "modifica");
+        assertEquals(evaluation.getEvaluationId(), updated.getEvaluationId());
         assertEquals(15, evaluation.getScore());
         controller.evaluateWarning(7, second.getReportId(), 30);
         assertEquals(0, evaluation.getScore()); assertEquals(25, evaluation.getBaseScore());

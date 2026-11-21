@@ -58,7 +58,7 @@ public class UpdateSubmissionCommand implements Command {
             System.out.println("lastUpdatedAt attuale: " + existing.getLastUpdatedAt());
             String newContent = inputHelper.readNonBlank("Nuovo contenuto submission");
 
-            Submission updated = submissionController.submitOrUpdate(currentUserId.get(), teamId, newContent);
+            Submission updated = submissionController.updateSubmission(currentUserId.get(), teamId, newContent);
             System.out.println("Submission aggiornata. lastUpdatedAt=" + updated.getLastUpdatedAt());
         } catch (OperationCancelledException ex) {
             System.out.println("Operazione annullata.");
