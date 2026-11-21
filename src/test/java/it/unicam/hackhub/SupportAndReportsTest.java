@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import java.time.LocalDateTime;
@@ -72,6 +73,10 @@ class SupportAndReportsTest {
         assertTrue(proposals.findById(proposal.getProposalId()).orElseThrow().isBooked());
         assertThrows(IllegalStateException.class, () -> support.cancelSupportRequest(userId, request.getRequestId()));
         assertThrows(IllegalStateException.class, () -> support.bookCall(userId, proposal.getProposalId()));
+        assertThrows(DataIntegrityViolationException.class, () -> proposals.saveBooking(
+                new CallBooking(0, proposal.getProposalId(), booking.getMeetingLink(), LocalDateTime.now())));
+        assertEquals(booking.getCallId(), proposals.findBookingByProposalId(proposal.getProposalId())
+                .orElseThrow().getCallId());
         verify(calendar, times(2)).createMeetingLink(any(), any());
     }
 

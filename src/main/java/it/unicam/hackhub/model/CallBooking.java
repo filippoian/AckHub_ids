@@ -5,11 +5,13 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "call_bookings")
+@Table(name = "call_bookings",
+        uniqueConstraints = @UniqueConstraint(name = "uk_call_bookings_proposal_id", columnNames = "proposalId"))
 public class CallBooking {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
